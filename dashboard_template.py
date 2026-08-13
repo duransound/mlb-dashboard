@@ -436,7 +436,7 @@ function drawScatter(container, cfg) {{
         const n = cfg.data.filter(d => d.team === selectedTeam).length;
         const teamFull = (cfg.teamNames && cfg.teamNames[selectedTeam]) || selectedTeam;
         const possessive = teamFull.endsWith("s") ? teamFull + "'" : teamFull + "'s";
-        caption.textContent = `Highlighting ${{possessive}} ${{n}} tracked player${{n === 1 ? "" : "s"}} against the full sample.`;
+        caption.textContent = `Now spotlighting ${{possessive}} ${{n}} tracked player${{n === 1 ? "" : "s"}} against the rest of the league.`;
       }}
     }});
   }}
@@ -742,7 +742,7 @@ function drawTeamCompare(container, cfg) {{
     }});
 
     const teamFull = (cfg.teamNames && cfg.teamNames[teamAbbr]) ? cfg.teamNames[teamAbbr] : teamAbbr;
-    caption.textContent = `${{teamFull}}: ${{top.name}} leads the roster in ${{statCfg.label}} (${{top[statKey].toFixed(2)}}${{statCfg.suffix || ""}}).`;
+    caption.textContent = `${{top.name}} paces the ${{teamFull}} roster in ${{statCfg.label}}, at ${{top[statKey].toFixed(2)}}${{statCfg.suffix || ""}}.`;
   }}
 
   teamSelect.addEventListener("change", render);
@@ -809,7 +809,7 @@ function drawMvpTracker(container, cfg) {{
     }});
 
     const leagueFull = league === "AL" ? "American League" : "National League";
-    caption.textContent = `${{leader.name}} (${{leader.team}}) leads the ${{leagueFull}} at ${{leader.war.toFixed(1)}} WAR.`;
+    caption.textContent = `${{leader.name}} (${{leader.team}}) currently tops the ${{leagueFull}} MVP race, at ${{leader.war.toFixed(1)}} WAR.`;
   }}
 
   leagueSelect.addEventListener("change", render);

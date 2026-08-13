@@ -50,12 +50,19 @@ def _possessive(name):
 
 def build_team_blurbs(rows, team_names):
     """rows: output of add_derived_fields(). team_names: {abbr: full name}.
-    Returns {abbr: blurb} -- a short, data-grounded paragraph about each
-    team's tracked players, computed once here (alongside every other
-    chart's vetted insight sentences) rather than re-derived in JS from raw
-    rows -- same "insight text is pre-computed, JS only renders" convention
-    used everywhere else in this dashboard. Surfaced next to a Team
-    dropdown (League Picture, Compare Teammates) once that team is picked."""
+    Returns {abbr: blurb} -- a short, data-grounded STORY about each team's
+    tracked players (verdict, then evidence, then the people behind it),
+    computed once here (alongside every other chart's vetted insight
+    sentences) rather than re-derived in JS from raw rows -- same "insight
+    text is pre-computed, JS only renders" convention used everywhere else
+    in this dashboard. Surfaced next to a Team dropdown (League Picture,
+    Compare Teammates) once that team is picked.
+
+    Written in a lead-with-the-takeaway, assertion-evidence style (open with
+    the verdict a reader would want to know first -- bargain or overpay --
+    then back it up with the number, then name the people who made it true)
+    rather than a flat list of stats, so it reads like a sentence someone
+    would actually say about the team, not a stat line."""
     by_team = {}
     for r in rows:
         by_team.setdefault(r["team"], []).append(r)
@@ -64,6 +71,8 @@ def build_team_blurbs(rows, team_names):
     for abbr, players in by_team.items():
         team_full = team_names.get(abbr, abbr)
         n = len(players)
+        roster_word = "player" if n == 1 else "players"
+        verb = "has" if n == 1 else "have"
         total_war = sum(p["war"] for p in players)
         total_salary_m = sum(p["salary_m"] for p in players)
         total_surplus_m = sum(p["surplus_m"] for p in players)
@@ -71,26 +80,26 @@ def build_team_blurbs(rows, team_names):
         priciest = max(players, key=lambda p: p["salary_m"])
 
         if total_surplus_m >= 0:
-            value_sentence = (f"as a group they're outproducing their pay by about "
-                               f"${total_surplus_m:.0f}M at market rate — a net bargain for the roster.")
+            verdict = f"The {team_full} are getting a bargain."
+            gap_sentence = (f"Their {n} tracked {roster_word} {verb} produced {total_war:.1f} wins above "
+                             f"replacement for a combined ${total_salary_m:.1f}M — about ${total_surplus_m:.0f}M "
+                             "more than the open market would charge for that kind of production.")
         else:
-            value_sentence = (f"as a group they're being paid about ${abs(total_surplus_m):.0f}M more "
-                               f"than their production is worth at market rate — a net overpay for the roster.")
+            verdict = f"The {team_full} are paying a premium."
+            gap_sentence = (f"Their {n} tracked {roster_word} {verb} produced {total_war:.1f} wins above "
+                             f"replacement for a combined ${total_salary_m:.1f}M — about "
+                             f"${abs(total_surplus_m):.0f}M more than the open market would charge for that "
+                             "kind of production.")
 
         if best_value["id"] == priciest["id"]:
-            pay_sentence = (f"{best_value['name']} is both the roster's best tracked value and its "
-                             f"highest-paid tracked player, at {best_value['war']:.1f} WAR on "
-                             f"${best_value['salary_m']:.1f}M.")
+            people_sentence = (f"{best_value['name']} is both the best value on the roster and its biggest "
+                                f"expense, putting up {best_value['war']:.1f} WAR on ${best_value['salary_m']:.1f}M.")
         else:
-            pay_sentence = (f"{best_value['name']} leads the roster in value ({best_value['war']:.1f} WAR "
-                             f"on ${best_value['salary_m']:.1f}M), while {priciest['name']} is the "
-                             f"highest-paid tracked player (${priciest['salary_m']:.1f}M).")
+            people_sentence = (f"{best_value['name']} is doing the heavy lifting — {best_value['war']:.1f} WAR "
+                                f"on just ${best_value['salary_m']:.1f}M — while {priciest['name']} carries the "
+                                f"roster's biggest price tag at ${priciest['salary_m']:.1f}M.")
 
-        blurbs[abbr] = (
-            f"{_possessive(team_full)} {n} tracked player{'s' if n != 1 else ''} "
-            f"{'has' if n == 1 else 'have'} combined for {total_war:.1f} WAR on ${total_salary_m:.1f}M in "
-            f"tracked salary — {value_sentence} {pay_sentence}"
-        )
+        blurbs[abbr] = f"{verdict} {gap_sentence} {people_sentence}"
     return blurbs
 
 
@@ -128,12 +137,14 @@ def build_value_scatter(rows, team_names=None):
         "type": "scatter", "tabLabel": "League Picture",
         "metricLabel": "WAR vs. Salary, 2026 season",
         "title": f"{best['name']} is producing {per_m:.2f} WAR per $1M of salary — the best return in this sample",
-        "blurb": (f"Wins Above Replacement (WAR, y-axis) vs. salary in millions (x-axis, log scale) for {len(rows)} "
-                   "tracked players (see the README for sample coverage). Salary is log-scaled because it spans "
-                   "roughly two orders of magnitude, from league-minimum to $70M+ — on a linear axis, that "
-                   "crushes almost every player into a sliver near zero. Dashed lines mark the sample's median "
-                   "WAR and median salary — top-left is cheap-and-great, bottom-right is expensive-and-"
-                   "underperforming. Use the Team dropdown to pick out one roster."),
+        "blurb": (f"Every dot is a player: how many wins they've added (WAR, up the side) against what it cost "
+                   f"to add them (salary, across the bottom), for {len(rows)} tracked players (see the README "
+                   "for sample coverage). The players worth talking about live in the top-left — great "
+                   "production for not much money — while the bottom-right is where expensive disappointments "
+                   "hide. (Salary runs on a log scale so a $2M reliever and a $35M ace don't get crushed into "
+                   "the same sliver of the chart.) The dashed lines mark the sample's median WAR and median "
+                   "salary, splitting the field into those four quadrants. Pick a team from the dropdown to see "
+                   "where its roster falls in the picture."),
         "xAxisLabel": "Salary ($M, log scale)", "yAxisLabel": "WAR", "xScaleType": "log",
         "medianLines": True, "radius": scatter_display_params(len(rows)),
         "teamNames": team_names or {},
@@ -185,11 +196,13 @@ def build_surplus_value_chart(rows, market_rate, top_n=15, bottom_n=10):
         "type": "diverging-bar", "tabLabel": "Surplus Value",
         "metricLabel": "Surplus Value (market value of WAR minus salary)",
         "title": title,
-        "blurb": (f"Top {len([r for r in deduped if r['surplus']>=0])} bargains and bottom "
-                   f"{len([r for r in deduped if r['surplus']<0])} overpays in the sample, by surplus dollars. "
-                   f"Market value = WAR x ${market_rate/1_000_000:.0f}M (the 2025-26 free-agent market's overall "
-                   "average cost per win, per FanGraphs — see README for the source and its limits as a single "
-                   "blended rate)."),
+        "blurb": (f"Every player here is being measured against one question: are they worth what they're "
+                   f"being paid? 'Market value' assumes a win costs about ${market_rate/1_000_000:.0f}M this "
+                   "year — the going free-agent rate, per FanGraphs (see README for the source and its limits "
+                   "as a single blended number) — multiply that by a player's WAR and compare it to their "
+                   f"actual salary, and you get the gap below. The top {len([r for r in deduped if r['surplus']>=0])} "
+                   f"bars are the sample's best bargains; the bottom {len([r for r in deduped if r['surplus']<0])} "
+                   "are its priciest disappointments."),
         "valueLabel": "Surplus ($M)", "xAxisLabel": "Surplus vs. market value ($M)",
         "footnote": "Positive = produced more market value than salary paid (underpaid); negative = the reverse (overpaid) relative to the sample's blended $/WAR rate.",
         "data": [
@@ -229,11 +242,12 @@ def build_team_spend_chart(rows, team_payroll, team_names):
         "type": "scatter", "tabLabel": "Team Spending vs. Production",
         "metricLabel": "Team payroll vs. sample WAR produced",
         "title": f"{best['name']} gets the most sample WAR per payroll dollar of the 15 teams covered here",
-        "blurb": ("Each team's estimated total 2026 payroll (x-axis, all 40-man roster salary, not just the "
-                   "players in this sample) vs. the combined WAR of THIS SAMPLE'S players on that roster "
-                   "(y-axis) — not the team's true total WAR, since this dashboard only tracks the curated "
-                   "player set described in the README. Reads best as \"how much of what this team is paying "
-                   "for shows up in the players we're tracking,\" not a full efficiency ranking."),
+        "blurb": ("Each dot is a team: what they're spending on their whole roster (across the bottom, all "
+                   "40-man payroll, not just the players in this sample) against how much of that shows up as "
+                   "WAR from the players we're actually tracking (up the side) — not the team's true total "
+                   "production, just the slice this dashboard follows (see the README for what's covered). "
+                   "Read it as \"how much of this team's payroll is buying tracked value,\" not a complete "
+                   "efficiency verdict."),
         "xAxisLabel": "Estimated total 2026 payroll ($M)", "yAxisLabel": "Sample WAR (players tracked on this roster)",
         "medianLines": True, "radius": 15,
         "data": [
@@ -266,7 +280,7 @@ def build_team_compare_chart(rows, team_names):
         "type": "team-compare", "tabLabel": "Compare Teammates",
         "metricLabel": "Team Roster Comparison",
         "title": "Compare tracked teammates head-to-head",
-        "blurb": f"Pick one of the {len(team_names)} tracked teams to see how its players in this sample stack up on WAR, salary, or surplus value.",
+        "blurb": f"Pick one of the {len(team_names)} tracked teams below to see who's producing, who's earning, and who's actually worth it.",
         "footnote": "Only players in this dashboard's curated sample appear here — not a full 40-man roster.",
         "teamNames": team_names,
         "teamBlurbs": build_team_blurbs(rows, team_names),
@@ -332,10 +346,10 @@ def build_mvp_tracker(rows, top_n=10):
         "type": "mvp-tracker", "tabLabel": "MVP Tracker",
         "metricLabel": "MVP Tracker (by WAR)",
         "title": "Who's leading each league's MVP conversation right now",
-        "blurb": (f"Top {top_n} players by WAR in each league — WAR is the standard sabermetric proxy for an "
-                   "MVP case, not an actual ballot. Pick a league to see its current top group; pitchers are "
-                   "included since WAR scales them against hitters, even though real MVP voting leans heavily "
-                   "toward position players in practice."),
+        "blurb": (f"There's no ballot in this data — just WAR, sabermetrics' closest thing to a single number "
+                   f"for 'who mattered most.' These are the top {top_n} by that measure in each league. "
+                   "Pitchers are in the mix too, since WAR puts them on the same scale as hitters, even though "
+                   "real MVP voters usually don't."),
         "footnote": "Ranked within this dashboard's tracked player sample -- see the README for what that sample covers. The live full-league path covers nearly every qualifying player, so this is close to a true league leaderboard there; the 47-player demo snapshot is a much smaller, curated sample and can miss real contenders.",
         "leagues": leaders,
         "defaultLeague": default_league,
@@ -348,7 +362,11 @@ def build_story_lede(charts):
     than a fresh pass over raw data -- same approach as the NWSL kit's
     build_story_lede, and for the same reason: every chart's `title` is
     already a vetted, insight-stating sentence, so reusing it verbatim can
-    never assert something a tab doesn't support."""
+    never assert something a tab doesn't support.
+
+    The two titles are joined with "And" rather than just placed back to
+    back -- a small thing, but it's the difference between two unrelated
+    facts and one connected thought, which is the whole point of a lede."""
     by_tab = {c["tabLabel"]: c for c in charts if c}
     lead = by_tab.get("League Picture")
     second = by_tab.get("Surplus Value")
@@ -356,5 +374,5 @@ def build_story_lede(charts):
         return None
     sentences = [lead["title"].rstrip(".") + "."]
     if second and second is not lead:
-        sentences.append(second["title"].rstrip(".") + ".")
+        sentences.append("And " + second["title"].rstrip(".") + ".")
     return " ".join(sentences)
