@@ -64,12 +64,12 @@
   .picker-row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 4px; }
   .picker-group { display: flex; flex-direction: column; }
   .compare-caption { font-size: 12.5px; color: var(--text-primary); font-weight: 500; margin-top: 14px; }
-  /* The longer, paragraph-style team blurb (build_team_blurbs) reads as
-     supporting detail, not a headline stat -- lighter weight/color than the
-     punchier one-line stat-leader caption that follows it, and pulled in
-     closer so the two read as one connected block. */
-  .compare-caption.team-blurb { font-weight: 400; color: var(--text-secondary); margin-bottom: 2px; }
-  .compare-caption.team-blurb + .compare-caption { margin-top: 6px; }
+  /* The longer, paragraph-style team blurb (build_team_blurbs) sits right
+     under the Team dropdown, above the chart -- so picking a team gives
+     immediate feedback without scrolling past a (sometimes tall,
+     872-player) chart to find it. Lighter weight/color than the punchier
+     one-line stat-leader caption that sits below the chart. */
+  .compare-caption.team-blurb { font-weight: 400; color: var(--text-secondary); margin-top: 14px; margin-bottom: 16px; }
   .axis line { stroke: var(--baseline); }
   .axis text { fill: var(--text-muted); font-size: 11px; }
   .gridline { stroke: var(--grid); stroke-width: 1px; }
@@ -400,12 +400,15 @@ function drawScatter(container, cfg) {
     pickerRow.appendChild(teamGroup);
     container.appendChild(pickerRow);
 
-    chartMount = document.createElement("div");
-    container.appendChild(chartMount);
-
+    // Blurb goes right after the dropdown, before the chart -- picking a
+    // team should give feedback you can see without scrolling past the
+    // (often tall, full-league) scatter below it.
     const caption = document.createElement("p");
     caption.className = "compare-caption team-blurb";
     container.appendChild(caption);
+
+    chartMount = document.createElement("div");
+    container.appendChild(chartMount);
 
     teamSelect.addEventListener("change", () => {
       selectedTeam = teamSelect.value;
@@ -687,16 +690,18 @@ function drawTeamCompare(container, cfg) {
   pickerRow.appendChild(statGroup);
   container.appendChild(pickerRow);
 
-  const chartMount = document.createElement("div");
-  container.appendChild(chartMount);
-
-  // Team blurb (pre-computed Python-side, build_team_blurbs) sits above the
-  // stat-specific leader line -- one is "what does the data say about this
-  // team overall" (fixed per team), the other is "who's on top of the
-  // metric you just picked" (changes with the Metric dropdown too).
+  // Team blurb (pre-computed Python-side, build_team_blurbs) sits right
+  // after the dropdowns, above the chart -- one is "what does the data say
+  // about this team overall" (fixed per team, visible the instant you pick
+  // one), the other (the caption below the chart) is "who's on top of the
+  // metric you just picked" (changes with the Metric dropdown too, and
+  // reads naturally right under the bar it's describing).
   const teamBlurbEl = document.createElement("p");
   teamBlurbEl.className = "compare-caption team-blurb";
   container.appendChild(teamBlurbEl);
+
+  const chartMount = document.createElement("div");
+  container.appendChild(chartMount);
 
   const caption = document.createElement("p");
   caption.className = "compare-caption";
