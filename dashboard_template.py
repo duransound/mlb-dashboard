@@ -31,16 +31,17 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     --text-muted: #898781;
     --grid: #e1e0d9;
     --baseline: #c3c2b7;
-    --series-1: #2a78d6;
-    --series-1-dark: #1c5cab;
-    --series-1-ink: #ffffff;
+    --series-1: #C98A2E;
+    --series-1-dark: #8A5A1E;
+    --series-1-ink: #1F1B16;
+    --surface-2: #eceff1;
     --red: #e34948;
     --font-body: 'Karla', system-ui, -apple-system, "Segoe UI", sans-serif;
     --font-head: 'Fraunces', Georgia, serif;
     --font-brand: 'Fraunces', Georgia, serif;
-    --brand-amber: #A9762F;
-    --brand-ink: #16294A;
-    --brand-clay: #C8372C;
+    --brand-amber: #C98A2E;
+    --brand-ink: #1F1B16;
+    --brand-clay: #B5573F;
     --brand-warmgray: #8C8377;
   }}
   * {{ box-sizing: border-box; }}
@@ -77,6 +78,12 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   .picker-row {{ display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 4px; }}
   .picker-group {{ display: flex; flex-direction: column; }}
   .compare-caption {{ font-size: 12.5px; color: var(--text-primary); font-weight: 500; margin-top: 14px; }}
+  /* The longer, paragraph-style team blurb (build_team_blurbs) reads as
+     supporting detail, not a headline stat -- lighter weight/color than the
+     punchier one-line stat-leader caption that follows it, and pulled in
+     closer so the two read as one connected block. */
+  .compare-caption.team-blurb {{ font-weight: 400; color: var(--text-secondary); margin-bottom: 2px; }}
+  .compare-caption.team-blurb + .compare-caption {{ margin-top: 6px; }}
   .axis line {{ stroke: var(--baseline); }}
   .axis text {{ fill: var(--text-muted); font-size: 11px; }}
   .gridline {{ stroke: var(--grid); stroke-width: 1px; }}
@@ -88,13 +95,29 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   .bar-label {{ fill: var(--text-primary); font-size: 11px; }}
   .bar-label.muted {{ fill: var(--text-muted); }}
   .bar-value {{ fill: var(--text-secondary); font-size: 10.5px; }}
-  .annotation {{ fill: var(--text-primary); font-size: 11.5px; font-weight: 600; }}
+  .annotation {{
+    fill: var(--text-primary); font-size: 11.5px; font-weight: 600;
+    /* Halo behind the text (a stroke drawn under the fill via paint-order)
+       so the one annotated point's label stays legible even when it lands
+       over a busy background -- e.g. a dense unlabeled scatter cluster,
+       see drawScatter's DENSE_THRESHOLD. */
+    paint-order: stroke; stroke: var(--surface-1); stroke-width: 4px; stroke-linejoin: round;
+  }}
   .bubble {{ fill: var(--series-1); stroke: var(--surface-1); stroke-width: 2px; cursor: pointer; }}
   .bubble.muted {{ fill: var(--baseline); }}
   .bubble:hover, .bubble.hover {{ fill: var(--series-1-dark); }}
+  /* Dense mode (hundreds of unlabeled points): a lighter stroke and some
+     fill transparency so overlapping dots read as visible density rather
+     than a solid mass -- see drawScatter's DENSE_THRESHOLD. */
+  .bubble.dense {{ stroke-width: 1px; fill-opacity: 0.8; }}
+  .bubble.dense.muted {{ fill-opacity: 0.55; }}
   .badge-text {{ fill: var(--series-1-ink); font-size: 9.5px; font-weight: 600; text-anchor: middle; pointer-events: none; }}
   .badge-text.muted {{ fill: var(--text-secondary); }}
   .refline {{ stroke: var(--baseline); stroke-width: 1px; stroke-dasharray: 4 3; }}
+  /* Solid (not dashed), so it reads as a fixed reference point (0 WAR =
+     replacement level) rather than a sample-dependent statistic like the
+     dashed median lines. */
+  .zero-line {{ stroke: var(--text-muted); stroke-width: 1px; }}
   .tooltip {{
     position: absolute; pointer-events: none; background: var(--text-primary); color: #fff;
     padding: 8px 10px; border-radius: 6px; font-size: 12px; line-height: 1.5; opacity: 0;
@@ -122,29 +145,31 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 <div class="app">
   <div class="masthead">
     <svg class="masthead-mark" viewBox="0 0 240 240" aria-hidden="true">
-      <circle cx="120" cy="120" r="104" fill="#fcfcfb" stroke="#16294A" stroke-width="4"/>
-      <path fill="none" stroke="#C8372C" stroke-width="3.5" stroke-linecap="round"
-        d="M46,58 C78,86 78,154 46,182"/>
-      <path fill="none" stroke="#C8372C" stroke-width="3.5" stroke-linecap="round"
-        d="M194,58 C162,86 162,154 194,182"/>
-      <g stroke="#C8372C" stroke-width="2" stroke-linecap="round">
-        <line x1="52" y1="70" x2="66" y2="64"/>
-        <line x1="46" y1="86" x2="61" y2="82"/>
-        <line x1="44" y1="103" x2="59" y2="101"/>
-        <line x1="44" y1="120" x2="59" y2="120"/>
-        <line x1="44" y1="137" x2="59" y2="139"/>
-        <line x1="46" y1="154" x2="61" y2="158"/>
-        <line x1="52" y1="170" x2="66" y2="176"/>
-        <line x1="188" y1="70" x2="174" y2="64"/>
-        <line x1="194" y1="86" x2="179" y2="82"/>
-        <line x1="196" y1="103" x2="181" y2="101"/>
-        <line x1="196" y1="120" x2="181" y2="120"/>
-        <line x1="196" y1="137" x2="181" y2="139"/>
-        <line x1="194" y1="154" x2="179" y2="158"/>
-        <line x1="188" y1="170" x2="174" y2="176"/>
+      <g stroke="#B5573F" fill="none" stroke-linecap="round" opacity="0.6">
+        <path d="M6,74 L234,74" stroke-width="2"/>
+        <path d="M6,74 C34,46 52,20 68,20 C92,20 96,54 120,58 C144,54 148,20 172,20 C188,20 206,46 234,74" stroke-width="2"/>
+        <line x1="63" y1="72" x2="63" y2="20" stroke-width="3"/>
+        <line x1="73" y1="72" x2="73" y2="20" stroke-width="3"/>
+        <line x1="63" y1="34" x2="73" y2="34" stroke-width="2"/>
+        <line x1="63" y1="52" x2="73" y2="52" stroke-width="2"/>
+        <line x1="167" y1="72" x2="167" y2="20" stroke-width="3"/>
+        <line x1="177" y1="72" x2="177" y2="20" stroke-width="3"/>
+        <line x1="167" y1="34" x2="177" y2="34" stroke-width="2"/>
+        <line x1="167" y1="52" x2="177" y2="52" stroke-width="2"/>
+      </g>
+      <path fill="none" stroke="#8C8377" stroke-width="1.5" opacity="0.25" stroke-linecap="round" d="M-10,80 C40,72 80,88 120,80 C160,72 200,88 250,80"/>
+      <path fill="none" stroke="#8C8377" stroke-width="1.5" opacity="0.35" stroke-linecap="round" d="M-10,195 C40,183 80,207 120,195 C160,183 200,207 250,195"/>
+      <path fill="none" stroke="#8C8377" stroke-width="2" opacity="0.55" stroke-linecap="round" d="M-10,210 C40,196 90,224 130,210 C170,196 210,224 250,210"/>
+      <path fill="none" stroke="#8C8377" stroke-width="2.5" opacity="0.8" stroke-linecap="round" d="M-10,226 C40,210 90,240 130,226 C170,210 220,240 250,226"/>
+      <g transform="translate(120,150)">
+        <g transform="rotate(0)"><path fill="#C98A2E" stroke="#1F1B16" stroke-width="2.5" d="M0,0 C-20,-10 -34,-30 -30,-50 C-26,-68 26,-68 30,-50 C34,-30 20,-10 0,0 Z"/></g>
+        <g transform="rotate(90)"><path fill="#C98A2E" stroke="#1F1B16" stroke-width="2.5" d="M0,0 C-20,-10 -34,-30 -30,-50 C-26,-68 26,-68 30,-50 C34,-30 20,-10 0,0 Z"/></g>
+        <g transform="rotate(180)"><path fill="#C98A2E" stroke="#1F1B16" stroke-width="2.5" d="M0,0 C-20,-10 -34,-30 -30,-50 C-26,-68 26,-68 30,-50 C34,-30 20,-10 0,0 Z"/></g>
+        <g transform="rotate(270)"><path fill="#C98A2E" stroke="#1F1B16" stroke-width="2.5" d="M0,0 C-20,-10 -34,-30 -30,-50 C-26,-68 26,-68 30,-50 C34,-30 20,-10 0,0 Z"/></g>
+        <circle r="8" fill="#1F1B16"/>
       </g>
     </svg>
-    <span class="masthead-word">Diamond Dollars</span>
+    <span class="masthead-word">Poppies in the Fog</span>
   </div>
   <div class="app-header">
     <h1>{title}</h1>
@@ -178,6 +203,28 @@ function ticksFor(minVal, maxVal, targetTicks) {{
   for (let t = start; t <= maxVal + 1e-6; t += step) out.push(Math.round(t * 1000) / 1000);
   return out;
 }}
+
+// 1-2-5-per-decade ticks (1, 2, 5, 10, 20, 50, 100, ...) -- the standard
+// spacing for a log axis, used when a value's real range spans multiple
+// orders of magnitude (e.g. MLB salary: a ~$400K league-minimum player and
+// a $70M+ star on the same axis). A linear axis in that case spends nearly
+// all its pixels on the handful of high earners and crushes everyone else
+// into the first few percent of the width -- confirmed against a live
+// 676-player run, where that crushing (not point count on its own) was the
+// real source of the "still cluttered" complaint after per-point labels
+// were already removed for dense charts.
+function logTicksFor(minVal, maxVal) {{
+  const startExp = Math.floor(Math.log10(minVal));
+  const endExp = Math.ceil(Math.log10(maxVal));
+  const out = [];
+  for (let exp = startExp; exp <= endExp; exp++) {{
+    for (const m of [1, 2, 5]) {{
+      const v = m * Math.pow(10, exp);
+      if (v >= minVal * 0.999 && v <= maxVal * 1.001) out.push(Math.round(v * 1000) / 1000);
+    }}
+  }}
+  return out;
+}}
 const tooltip = document.getElementById("tooltip");
 
 function showTooltip(html, event) {{
@@ -207,7 +254,12 @@ function drawDivergingBar(container, cfg) {{
     // that already exists.
     const effective = activeCid === null ? cfg.data
       : cfg.data.map(d => ({{...d, highlight: d.__cid === activeCid}}));
-    const data = [...effective].sort((a, b) => a.value - b.value);
+    // Descending -- row 0 (top of the chart) is the highest value. Every
+    // caller of this chart (Surplus Value, MVP Tracker, Compare Teammates)
+    // treats "first row" as "top-ranked," so the chart itself needs to
+    // render that way rather than each caller working around an ascending
+    // sort with y-axis flips or reversed data.
+    const data = [...effective].sort((a, b) => b.value - a.value);
     const longestLabel = Math.max(...data.map(d => d.label.length));
     const margin = {{top: 8, right: 30, bottom: 34, left: Math.max(90, longestLabel * 6.5 + 12)}};
     const width = 820 - margin.left - margin.right;
@@ -320,18 +372,90 @@ function drawScatter(container, cfg) {{
   // travel via an id, not screen position).
   cfg.data.forEach((d, i) => {{ if (d.__cid === undefined) d.__cid = i; }});
   let activeCid = null; // null = show the curated default highlight
+  let selectedTeam = "ALL";
+
+  // Team picker -- only for charts whose points carry a `team` (i.e. a
+  // player-level scatter like League Picture, not a team-level one like
+  // Team Spending vs. Production, where each point already IS one team).
+  // Picking a team highlights every one of that team's players against the
+  // full-league backdrop, same highlight/mute convention used everywhere
+  // else, rather than filtering the rest out entirely -- the point of this
+  // chart is seeing a team's roster *relative to the whole league*, which a
+  // filtered-down view would throw away.
+  const hasTeams = cfg.data.some(d => d.team);
+  let chartMount = container;
+  if (hasTeams) {{
+    const pickerRow = document.createElement("div");
+    pickerRow.className = "picker-row";
+    const teamGroup = document.createElement("div");
+    teamGroup.className = "picker-group";
+    const teamLabel = document.createElement("div");
+    teamLabel.className = "picker-label";
+    teamLabel.textContent = "Team";
+    const teamSelect = document.createElement("select");
+    const allOpt = el2("option", {{value: "ALL"}});
+    allOpt.textContent = "All teams";
+    teamSelect.appendChild(allOpt);
+    [...new Set(cfg.data.map(d => d.team))].sort((a, b) => {{
+      const nameA = (cfg.teamNames && cfg.teamNames[a]) || a;
+      const nameB = (cfg.teamNames && cfg.teamNames[b]) || b;
+      return nameA.localeCompare(nameB);
+    }}).forEach(abbr => {{
+      const opt = el2("option", {{value: abbr}});
+      opt.textContent = (cfg.teamNames && cfg.teamNames[abbr]) ? cfg.teamNames[abbr] : abbr;
+      teamSelect.appendChild(opt);
+    }});
+    teamGroup.appendChild(teamLabel);
+    teamGroup.appendChild(teamSelect);
+    pickerRow.appendChild(teamGroup);
+    container.appendChild(pickerRow);
+
+    chartMount = document.createElement("div");
+    container.appendChild(chartMount);
+
+    const caption = document.createElement("p");
+    caption.className = "compare-caption team-blurb";
+    container.appendChild(caption);
+
+    teamSelect.addEventListener("change", () => {{
+      selectedTeam = teamSelect.value;
+      activeCid = null; // a team pick supersedes a single clicked point
+      renderOnce();
+      if (selectedTeam === "ALL") {{
+        caption.textContent = "";
+      }} else if (cfg.teamBlurbs && cfg.teamBlurbs[selectedTeam]) {{
+        // Pre-computed on the Python side (build_team_blurbs) -- combined
+        // WAR/salary/surplus for the team's tracked players, not re-derived
+        // here, so this stays consistent with every other insight sentence
+        // in the dashboard.
+        caption.textContent = cfg.teamBlurbs[selectedTeam];
+      }} else {{
+        const n = cfg.data.filter(d => d.team === selectedTeam).length;
+        const teamFull = (cfg.teamNames && cfg.teamNames[selectedTeam]) || selectedTeam;
+        const possessive = teamFull.endsWith("s") ? teamFull + "'" : teamFull + "'s";
+        caption.textContent = `Highlighting ${{possessive}} ${{n}} tracked player${{n === 1 ? "" : "s"}} against the full sample.`;
+      }}
+    }});
+  }}
 
   function renderOnce() {{
-    container.innerHTML = "";
+    chartMount.innerHTML = "";
     // Reader-driven highlight swap -- see drawDivergingBar for the same
     // pattern. Clicking a bubble makes it the sole highlighted bubble;
     // every other bubble mutes to gray, same as the curated default. If the
     // clicked point isn't the curated story point it simply has no
     // `annotation` text to show (that guard already exists below) -- the
     // color swap plus the existing hover tooltip is enough detail, and it
-    // avoids inventing a new sentence for an arbitrary point.
-    const data = activeCid === null ? cfg.data
-      : cfg.data.map(d => ({{...d, highlight: d.__cid === activeCid}}));
+    // avoids inventing a new sentence for an arbitrary point. A team pick
+    // from the dropdown above (if any) takes precedence over both.
+    let data;
+    if (selectedTeam !== "ALL") {{
+      data = cfg.data.map(d => ({{...d, highlight: d.team === selectedTeam}}));
+    }} else if (activeCid === null) {{
+      data = cfg.data;
+    }} else {{
+      data = cfg.data.map(d => ({{...d, highlight: d.__cid === activeCid}}));
+    }}
 
     const margin = {{top: 12, right: 24, bottom: 46, left: 58}};
     const width = 780 - margin.left - margin.right;
@@ -341,27 +465,59 @@ function drawScatter(container, cfg) {{
     const svg = el("svg", {{width: width + margin.left + margin.right, height: height + margin.top + margin.bottom}});
     const g = el("g", {{transform: `translate(${{margin.left}},${{margin.top}})`}});
     svg.appendChild(g);
-    container.appendChild(svg);
+    chartMount.appendChild(svg);
 
     const xMax = Math.max(...data.map(d => d.x)) * 1.15;
+    // yMin stays 0 unless the data actually goes negative (e.g. below-
+    // replacement WAR) -- then it extends down with the same 1.15 buffer
+    // used everywhere else, so those points get a real position on the
+    // chart instead of landing below the plotted area. Below-zero WAR is
+    // real (see build_dashboard.py -- it's no longer filtered out by
+    // default) and is exactly the data the Surplus Value tab's "biggest
+    // overpay" side depends on, so this chart needs to be able to show it.
+    const yMinRaw = Math.min(0, ...data.map(d => d.y));
+    const yMin = yMinRaw < 0 ? yMinRaw * 1.15 : 0;
     const yMax = Math.max(...data.map(d => d.y)) * 1.15;
-    const xScale = v => (v / xMax) * width;
+    const yRange = yMax - yMin;
+
+    // Log x-axis (cfg.xScaleType === "log"): for a value like MLB salary
+    // that spans ~2 orders of magnitude (a ~$0.4M league-minimum player to
+    // a $70M+ star), a linear axis spends nearly all its width on the
+    // handful of high earners and crushes the rest into the first few
+    // percent of the chart -- confirmed against a live 676-player run,
+    // where that (not raw point count, already handled by DENSE_THRESHOLD
+    // below) was the real source of remaining clutter. Only opt a chart
+    // into this when its x-value is guaranteed positive across its whole
+    // range -- log(0) and negative values have no position on this scale.
+    const xLog = cfg.xScaleType === "log";
+    let xScale, xTicks;
+    if (xLog) {{
+      const xMinData = Math.max(0.01, Math.min(...data.map(d => d.x)));
+      const logMin = Math.log10(xMinData), logMax = Math.log10(xMax);
+      xScale = v => ((Math.log10(Math.max(v, xMinData)) - logMin) / (logMax - logMin)) * width;
+      xTicks = logTicksFor(xMinData, xMax);
+    }} else {{
+      xScale = v => (v / xMax) * width;
+      xTicks = ticksFor(0, xMax, 8);
+    }}
     // invertY: plot higher values lower on screen (useful when "lower is better",
     // e.g. xG Against, so "up" reads as "good" on both axes at once)
-    const yScale = cfg.invertY ? (v => (v / yMax) * height) : (v => height - (v / yMax) * height);
+    const yScale = cfg.invertY
+      ? (v => ((v - yMin) / yRange) * height)
+      : (v => height - ((v - yMin) / yRange) * height);
 
-    ticksFor(0, xMax, 8).forEach(t => g.appendChild(el("line", {{class: "gridline", x1: xScale(t), x2: xScale(t), y1: 0, y2: height}})));
-    ticksFor(0, yMax, 8).forEach(t => g.appendChild(el("line", {{class: "gridline", x1: 0, x2: width, y1: yScale(t), y2: yScale(t)}})));
+    xTicks.forEach(t => g.appendChild(el("line", {{class: "gridline", x1: xScale(t), x2: xScale(t), y1: 0, y2: height}})));
+    ticksFor(yMin, yMax, 8).forEach(t => g.appendChild(el("line", {{class: "gridline", x1: 0, x2: width, y1: yScale(t), y2: yScale(t)}})));
 
     const xAxis = el("g", {{class: "axis", transform: `translate(0,${{height}})`}});
-    ticksFor(0, xMax, 8).forEach(t => {{
+    xTicks.forEach(t => {{
       const txt = el("text", {{x: xScale(t), y: 18, "text-anchor": "middle"}}); txt.textContent = t; xAxis.appendChild(txt);
     }});
     xAxis.appendChild(el("line", {{x1: 0, x2: width, y1: 0, y2: 0}}));
     g.appendChild(xAxis);
 
     const yAxis = el("g", {{class: "axis"}});
-    ticksFor(0, yMax, 8).forEach(t => {{
+    ticksFor(yMin, yMax, 8).forEach(t => {{
       const txt = el("text", {{x: -10, y: yScale(t) + 4, "text-anchor": "end"}}); txt.textContent = t; yAxis.appendChild(txt);
     }});
     yAxis.appendChild(el("line", {{x1: 0, x2: 0, y1: 0, y2: height}}));
@@ -374,6 +530,13 @@ function drawScatter(container, cfg) {{
       const lim = Math.min(xMax, yMax);
       g.appendChild(el("line", {{class: "refline", x1: xScale(0), y1: yScale(0), x2: xScale(lim), y2: yScale(lim)}}));
     }}
+    if (yMin < 0) {{
+      // A solid zero-WAR baseline, distinct from the dashed median lines --
+      // "replacement level" is a meaningful reference point in its own
+      // right (a below-replacement player is a specific, named bad
+      // outcome), not just wherever the sample's middle happens to fall.
+      g.appendChild(el("line", {{class: "zero-line", x1: 0, x2: width, y1: yScale(0), y2: yScale(0)}}));
+    }}
     if (cfg.medianLines) {{
       const medX = data.map(d => d.x).sort((a,b) => a-b)[Math.floor(data.length / 2)];
       const medY = data.map(d => d.y).sort((a,b) => a-b)[Math.floor(data.length / 2)];
@@ -381,13 +544,32 @@ function drawScatter(container, cfg) {{
       g.appendChild(el("line", {{class: "refline", x1: 0, x2: width, y1: yScale(medY), y2: yScale(medY)}}));
     }}
 
-    // true data positions, then nudge apart only enough to stop overlap
+    // true data positions, then (for a small-enough point count) nudge apart
+    // only enough to stop overlap. Past a point, per-point text labels can't
+    // work no matter how good the nudging is -- a few hundred 3-letter
+    // badges each need ~20px of clear horizontal room, which a ~700px-wide
+    // chart simply doesn't have, and forcing it just pushes labels into the
+    // margins and past the axes (confirmed against a live 676-player run:
+    // the result read as "points falling off the chart", when what had
+    // actually happened was label text spilling outside the plot area).
+    // Past DENSE_THRESHOLD points, skip per-point badges/collision-nudging
+    // entirely -- small muted dots at their true positions (design
+    // guidelines: "label selectively, never a number on every point"),
+    // identity carried by the tooltip instead of a label.
+    const DENSE_THRESHOLD = 60;
+    const denseMode = data.length > DENSE_THRESHOLD;
     const points = data.map(d => ({{x: xScale(d.x), y: yScale(d.y), d}}));
-    resolveCollisions(points, R, 3);
+    if (!denseMode) resolveCollisions(points, R, 3);
 
     const hasHighlight = data.some(d => d.highlight);
 
-    points.forEach(p => {{
+    // Draw order: muted points first, highlighted last -- so in a dense
+    // cluster the one highlighted point never ends up buried under later-
+    // drawn muted dots sharing roughly the same position (this is a stable
+    // sort, so it only reorders relative to highlight status, nothing else).
+    const drawOrder = [...points].sort((a, b) => (a.d.highlight ? 1 : 0) - (b.d.highlight ? 1 : 0));
+
+    drawOrder.forEach(p => {{
       const d = p.d;
       const isMuted = hasHighlight && !d.highlight;
       const dx = p.x - xScale(d.x), dy = p.y - yScale(d.y);
@@ -400,11 +582,21 @@ function drawScatter(container, cfg) {{
           stroke: "var(--baseline)", "stroke-width": 1, "stroke-dasharray": "2 2",
         }}));
       }}
-      const circle = el("circle", {{class: "bubble" + (isMuted ? " muted" : ""), r: R}});
-      const label = el("text", {{class: "badge-text" + (isMuted ? " muted" : ""), dy: "0.32em", "text-anchor": "middle"}});
-      label.textContent = d.badge;
+      // In dense mode the highlighted point gets a slightly bigger radius
+      // too -- on top of drawing last (see drawOrder above), size is a
+      // second, independent way for it to read as "the one point that
+      // matters" against a few hundred same-sized muted dots.
+      const denseHighlightBump = denseMode && d.highlight ? 3 : 0;
+      const circle = el("circle", {{
+        class: "bubble" + (isMuted ? " muted" : "") + (denseMode ? " dense" : ""),
+        r: (denseMode ? Math.max(R, 4) : R) + denseHighlightBump,
+      }});
       node.appendChild(circle);
-      node.appendChild(label);
+      if (!denseMode) {{
+        const label = el("text", {{class: "badge-text" + (isMuted ? " muted" : ""), dy: "0.32em", "text-anchor": "middle"}});
+        label.textContent = d.badge;
+        node.appendChild(label);
+      }}
 
       if (d.highlight && d.annotation) {{
         // Prefer placing the annotation beside the bubble (right, or left if
@@ -449,6 +641,7 @@ function drawScatter(container, cfg) {{
       node.addEventListener("mousemove", moveTooltip);
       node.addEventListener("mouseleave", () => {{ circle.classList.remove("hover"); hideTooltip(); }});
       node.addEventListener("click", () => {{
+        if (selectedTeam !== "ALL") return; // the team dropdown owns highlighting while a team is picked
         activeCid = (activeCid === d.__cid) ? null : d.__cid;
         renderOnce();
       }});
@@ -456,6 +649,7 @@ function drawScatter(container, cfg) {{
 
     // Clicking empty chart area (not a bubble) reverts to the curated default.
     svg.addEventListener("click", (event) => {{
+      if (selectedTeam !== "ALL") return;
       if (event.target === svg && activeCid !== null) {{ activeCid = null; renderOnce(); }}
     }});
   }}
@@ -506,6 +700,14 @@ function drawTeamCompare(container, cfg) {{
   const chartMount = document.createElement("div");
   container.appendChild(chartMount);
 
+  // Team blurb (pre-computed Python-side, build_team_blurbs) sits above the
+  // stat-specific leader line -- one is "what does the data say about this
+  // team overall" (fixed per team), the other is "who's on top of the
+  // metric you just picked" (changes with the Metric dropdown too).
+  const teamBlurbEl = document.createElement("p");
+  teamBlurbEl.className = "compare-caption team-blurb";
+  container.appendChild(teamBlurbEl);
+
   const caption = document.createElement("p");
   caption.className = "compare-caption";
   container.appendChild(caption);
@@ -516,6 +718,7 @@ function drawTeamCompare(container, cfg) {{
     const statKey = statSelect.value;
     const statCfg = cfg.stats.find(s => s.key === statKey);
     const players = cfg.rosters[teamAbbr] || [];
+    teamBlurbEl.textContent = (cfg.teamBlurbs && cfg.teamBlurbs[teamAbbr]) || "";
     if (players.length === 0) {{ caption.textContent = "No roster data for this team."; return; }}
     const sorted = [...players].sort((a, b) => b[statKey] - a[statKey]);
     const top = sorted[0];
@@ -545,6 +748,67 @@ function el2(tag, attrs) {{
   const e = document.createElement(tag);
   for (const k in (attrs || {{}})) e.setAttribute(k, attrs[k]);
   return e;
+}}
+
+function drawMvpTracker(container, cfg) {{
+  // Same picker-row + drawDivergingBar pattern as drawTeamCompare above,
+  // just switching on league (AL/NL) instead of team -- one leaderboard
+  // visible at a time rather than both leagues squeezed side by side,
+  // which would force either tiny bar labels or a much taller page.
+  const pickerRow = document.createElement("div");
+  pickerRow.className = "picker-row";
+  const leagueGroup = document.createElement("div");
+  leagueGroup.className = "picker-group";
+  const leagueLabel = document.createElement("div");
+  leagueLabel.className = "picker-label";
+  leagueLabel.textContent = "League";
+  const leagueSelect = document.createElement("select");
+  [["AL", "American League"], ["NL", "National League"]].forEach(([value, text]) => {{
+    const opt = el2("option", {{value}});
+    opt.textContent = text;
+    leagueSelect.appendChild(opt);
+  }});
+  leagueSelect.value = cfg.defaultLeague || "AL";
+  leagueGroup.appendChild(leagueLabel);
+  leagueGroup.appendChild(leagueSelect);
+  pickerRow.appendChild(leagueGroup);
+  container.appendChild(pickerRow);
+
+  const chartMount = document.createElement("div");
+  container.appendChild(chartMount);
+
+  const caption = document.createElement("p");
+  caption.className = "compare-caption";
+  container.appendChild(caption);
+
+  function render() {{
+    chartMount.innerHTML = "";
+    const league = leagueSelect.value;
+    const players = (cfg.leagues && cfg.leagues[league]) || [];
+    if (players.length === 0) {{ caption.textContent = "No tracked players in this league."; return; }}
+    const leader = players[0]; // Python side already sorts each league's list by WAR, descending
+
+    const barData = players.map(p => {{
+      const surplusSign = p.surplus_m >= 0 ? "+" : "";
+      return {{
+        label: `${{p.name}} (${{p.team}})`,
+        value: p.war,
+        highlight: p === leader,
+        extra: `${{p.role}} &middot; Salary $${{p.salary_m.toFixed(1)}}M &middot; Surplus vs. market: ${{surplusSign}}${{p.surplus_m.toFixed(1)}}M`,
+      }};
+    }});
+
+    drawDivergingBar(chartMount, {{
+      data: barData, oneSided: true,
+      valueLabel: "WAR", xAxisLabel: "WAR",
+    }});
+
+    const leagueFull = league === "AL" ? "American League" : "National League";
+    caption.textContent = `${{leader.name}} (${{leader.team}}) leads the ${{leagueFull}} at ${{leader.war.toFixed(1)}} WAR.`;
+  }}
+
+  leagueSelect.addEventListener("change", render);
+  render();
 }}
 
 function drawLine(container, cfg) {{
@@ -755,6 +1019,7 @@ CHARTS.forEach((chart, i) => {{
   if (chart.type === "diverging-bar") drawDivergingBar(mount, chart);
   if (chart.type === "scatter") drawScatter(mount, chart);
   if (chart.type === "team-compare") drawTeamCompare(mount, chart);
+  if (chart.type === "mvp-tracker") drawMvpTracker(mount, chart);
   if (chart.type === "line") drawLine(mount, chart);
   if (chart.type === "season-compare") drawSeasonCompare(mount, chart);
   if (chart.type === "shot-map") drawShotMap(mount, chart);

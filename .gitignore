@@ -4,3 +4,5 @@ __pycache__/
 history/
 .pybaseball_cache/
 weekly_update.log
+.poppies_theme.lock
+_to_delete/

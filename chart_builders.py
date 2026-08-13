@@ -38,6 +38,62 @@ def _cost_note(r):
     return " (AAV)" if r.get("is_aav") else ""
 
 
+def _possessive(name):
+    """"Los Angeles Dodgers" -> "Dodgers'"; "Houston Astros" -> "Astros'";
+    "Detroit Tigers" -> "Tigers'"; anything not already ending in "s" gets
+    the normal "'s" (e.g. "Boston Red Sox" -> "Red Sox's"). Mirrors the same
+    rule dashboard_template.py's drawScatter applies in JS for its own
+    (shorter) fallback caption -- kept in sync so neither path produces the
+    "Dodgers's" mistake."""
+    return name + "'" if name.endswith("s") else name + "'s"
+
+
+def build_team_blurbs(rows, team_names):
+    """rows: output of add_derived_fields(). team_names: {abbr: full name}.
+    Returns {abbr: blurb} -- a short, data-grounded paragraph about each
+    team's tracked players, computed once here (alongside every other
+    chart's vetted insight sentences) rather than re-derived in JS from raw
+    rows -- same "insight text is pre-computed, JS only renders" convention
+    used everywhere else in this dashboard. Surfaced next to a Team
+    dropdown (League Picture, Compare Teammates) once that team is picked."""
+    by_team = {}
+    for r in rows:
+        by_team.setdefault(r["team"], []).append(r)
+
+    blurbs = {}
+    for abbr, players in by_team.items():
+        team_full = team_names.get(abbr, abbr)
+        n = len(players)
+        total_war = sum(p["war"] for p in players)
+        total_salary_m = sum(p["salary_m"] for p in players)
+        total_surplus_m = sum(p["surplus_m"] for p in players)
+        best_value = max(players, key=lambda p: (p["war"] / p["salary_m"]) if p["salary_m"] else float("-inf"))
+        priciest = max(players, key=lambda p: p["salary_m"])
+
+        if total_surplus_m >= 0:
+            value_sentence = (f"as a group they're outproducing their pay by about "
+                               f"${total_surplus_m:.0f}M at market rate — a net bargain for the roster.")
+        else:
+            value_sentence = (f"as a group they're being paid about ${abs(total_surplus_m):.0f}M more "
+                               f"than their production is worth at market rate — a net overpay for the roster.")
+
+        if best_value["id"] == priciest["id"]:
+            pay_sentence = (f"{best_value['name']} is both the roster's best tracked value and its "
+                             f"highest-paid tracked player, at {best_value['war']:.1f} WAR on "
+                             f"${best_value['salary_m']:.1f}M.")
+        else:
+            pay_sentence = (f"{best_value['name']} leads the roster in value ({best_value['war']:.1f} WAR "
+                             f"on ${best_value['salary_m']:.1f}M), while {priciest['name']} is the "
+                             f"highest-paid tracked player (${priciest['salary_m']:.1f}M).")
+
+        blurbs[abbr] = (
+            f"{_possessive(team_full)} {n} tracked player{'s' if n != 1 else ''} "
+            f"{'has' if n == 1 else 'have'} combined for {total_war:.1f} WAR on ${total_salary_m:.1f}M in "
+            f"tracked salary — {value_sentence} {pay_sentence}"
+        )
+    return blurbs
+
+
 def scatter_display_params(n):
     """Adaptive bubble radius for the League Picture / Team Spending scatter
     charts -- the demo snapshot is a curated ~47 points (radius 13 reads
@@ -52,14 +108,19 @@ def scatter_display_params(n):
     return 13
 
 
-def build_value_scatter(rows):
-    """rows: output of add_derived_fields(). Returns the League Picture
-    scatter -- WAR (up) vs. Salary in $M (right), one bubble per player,
-    badge = team abbreviation. Median lines split the sample into four
-    quadrants (Design Guidelines "preattentive attributes for focus" --
-    dashed lines are structure, not a second highlighted series). The single
-    highlighted point is whoever delivered the most WAR per salary dollar in
-    this sample, i.e. the best-value bubble in the top-left "cheap and great"
+def build_value_scatter(rows, team_names=None):
+    """rows: output of add_derived_fields(). team_names: optional {abbr:
+    full name} dict (e.g. mlb_data.TEAM_NAMES) -- when given, the League
+    Picture tab gets a "Team" dropdown that highlights one team's players
+    against the full-league backdrop rather than filtering the rest out,
+    since the point of this chart is seeing a roster relative to the whole
+    league. Returns the League Picture scatter -- WAR (up) vs. Salary in $M
+    (right, log scale), one bubble per player, badge = team abbreviation.
+    Median lines split the sample into four quadrants (Design Guidelines
+    "preattentive attributes for focus" -- dashed lines are structure, not a
+    second highlighted series). The single highlighted point (when no team
+    is picked) is whoever delivered the most WAR per salary dollar in this
+    sample, i.e. the best-value bubble in the top-left "cheap and great"
     quadrant."""
     best = max(rows, key=lambda r: r["war"] / r["salary_m"])
     per_m = best["war"] / best["salary_m"]
@@ -67,13 +128,18 @@ def build_value_scatter(rows):
         "type": "scatter", "tabLabel": "League Picture",
         "metricLabel": "WAR vs. Salary, 2026 season",
         "title": f"{best['name']} is producing {per_m:.2f} WAR per $1M of salary — the best return in this sample",
-        "blurb": (f"Wins Above Replacement (WAR, y-axis) vs. salary in millions (x-axis) for {len(rows)} tracked "
-                   "players (see the README for sample coverage). Dashed lines mark the sample's median WAR and "
-                   "median salary — top-left is cheap-and-great, bottom-right is expensive-and-underperforming."),
-        "xAxisLabel": "Salary ($M)", "yAxisLabel": "WAR",
+        "blurb": (f"Wins Above Replacement (WAR, y-axis) vs. salary in millions (x-axis, log scale) for {len(rows)} "
+                   "tracked players (see the README for sample coverage). Salary is log-scaled because it spans "
+                   "roughly two orders of magnitude, from league-minimum to $70M+ — on a linear axis, that "
+                   "crushes almost every player into a sliver near zero. Dashed lines mark the sample's median "
+                   "WAR and median salary — top-left is cheap-and-great, bottom-right is expensive-and-"
+                   "underperforming. Use the Team dropdown to pick out one roster."),
+        "xAxisLabel": "Salary ($M, log scale)", "yAxisLabel": "WAR", "xScaleType": "log",
         "medianLines": True, "radius": scatter_display_params(len(rows)),
+        "teamNames": team_names or {},
+        "teamBlurbs": build_team_blurbs(rows, team_names) if team_names else {},
         "data": [
-            {"x": round(r["salary_m"], 3), "y": r["war"], "badge": r["team"],
+            {"x": round(r["salary_m"], 3), "y": r["war"], "badge": r["team"], "team": r["team"],
              "tooltip": (f'<div class="name">{r["name"]}</div>'
                          f'<div class="row">{r["team"]} &middot; {r["role"]}</div>'
                          f'<div class="row">WAR {r["war"]:.1f} &middot; Salary ${r["salary_m"]:.1f}M{_cost_note(r)}</div>'
@@ -200,15 +266,79 @@ def build_team_compare_chart(rows, team_names):
         "type": "team-compare", "tabLabel": "Compare Teammates",
         "metricLabel": "Team Roster Comparison",
         "title": "Compare tracked teammates head-to-head",
-        "blurb": "Pick one of the 15 tracked teams to see how its players in this sample stack up on WAR, salary, or surplus value.",
+        "blurb": f"Pick one of the {len(team_names)} tracked teams to see how its players in this sample stack up on WAR, salary, or surplus value.",
         "footnote": "Only players in this dashboard's curated sample appear here — not a full 40-man roster.",
         "teamNames": team_names,
+        "teamBlurbs": build_team_blurbs(rows, team_names),
         "rosters": rosters,
         "stats": [
             {"key": "war", "label": "WAR"},
             {"key": "salary_m", "label": "Salary ($M)", "suffix": "M"},
             {"key": "surplus_m", "label": "Surplus Value ($M)", "suffix": "M"},
         ],
+    }
+
+
+# This dashboard's own fixed AL/NL assignment -- 30 teams, doesn't change
+# season to season, but neither mlb_data.py's nor mlb_snapshot_data.py's
+# TEAM_NAMES dict carries a league flag, so it lives here instead of forcing
+# both data sources to agree on a new schema. ATH is the Athletics (their
+# current-city branding is a moving target -- see mlb_data.py's team-slug
+# docstring -- but the franchise stays AL West regardless of city name).
+TEAM_LEAGUE = {
+    "BAL": "AL", "BOS": "AL", "NYY": "AL", "TBR": "AL", "TOR": "AL",
+    "CHW": "AL", "CLE": "AL", "DET": "AL", "KCR": "AL", "MIN": "AL",
+    "HOU": "AL", "LAA": "AL", "ATH": "AL", "SEA": "AL", "TEX": "AL",
+    "ATL": "NL", "MIA": "NL", "NYM": "NL", "PHI": "NL", "WSN": "NL",
+    "CHC": "NL", "CIN": "NL", "MIL": "NL", "PIT": "NL", "STL": "NL",
+    "ARI": "NL", "COL": "NL", "LAD": "NL", "SDP": "NL", "SFG": "NL",
+}
+
+
+def build_mvp_tracker(rows, top_n=10):
+    """rows: output of add_derived_fields(). An "MVP tracker" isn't an
+    official stat -- there's no ballot data anywhere in this dashboard --
+    but a league's top-WAR leaderboard is the standard sabermetric proxy
+    for the MVP conversation (this is literally what Baseball-Reference's
+    and FanGraphs' WAR leaderboards get used for informally every season),
+    so that's what this tab shows: the top `top_n` players by WAR in each
+    league, one league at a time via a dropdown (see drawMvpTracker in
+    dashboard_template.py). Pitchers are included -- WAR puts them on the
+    same scale as hitters, even though real MVP ballots lean heavily toward
+    position players in practice; that caveat is in the blurb, not hidden."""
+    by_league = {"AL": [], "NL": []}
+    for r in rows:
+        league = TEAM_LEAGUE.get(r["team"])
+        if league:
+            by_league[league].append(r)
+
+    leaders = {}
+    for league, players in by_league.items():
+        ranked = sorted(players, key=lambda r: r["war"], reverse=True)[:top_n]
+        leaders[league] = [
+            {"name": r["name"], "team": r["team"], "war": round(r["war"], 1),
+             "role": r["role"], "salary_m": round(r["salary_m"], 1),
+             "surplus_m": round(r["surplus_m"], 1)}
+            for r in ranked
+        ]
+
+    # Open on whichever league has the single highest-WAR player overall,
+    # rather than always defaulting to AL by alphabetical accident -- the
+    # tab should land on the more compelling of the two races.
+    overall_best = max(rows, key=lambda r: r["war"]) if rows else None
+    default_league = TEAM_LEAGUE.get(overall_best["team"], "AL") if overall_best else "AL"
+
+    return {
+        "type": "mvp-tracker", "tabLabel": "MVP Tracker",
+        "metricLabel": "MVP Tracker (by WAR)",
+        "title": "Who's leading each league's MVP conversation right now",
+        "blurb": (f"Top {top_n} players by WAR in each league — WAR is the standard sabermetric proxy for an "
+                   "MVP case, not an actual ballot. Pick a league to see its current top group; pitchers are "
+                   "included since WAR scales them against hitters, even though real MVP voting leans heavily "
+                   "toward position players in practice."),
+        "footnote": "Ranked within this dashboard's tracked player sample -- see the README for what that sample covers. The live full-league path covers nearly every qualifying player, so this is close to a true league leaderboard there; the 47-player demo snapshot is a much smaller, curated sample and can miss real contenders.",
+        "leagues": leaders,
+        "defaultLeague": default_league,
     }
 
 

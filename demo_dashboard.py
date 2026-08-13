@@ -14,8 +14,9 @@ project is modeled on).
 """
 
 from chart_builders import (
-    add_derived_fields, build_story_lede, build_surplus_value_chart,
-    build_team_compare_chart, build_team_spend_chart, build_value_scatter,
+    add_derived_fields, build_mvp_tracker, build_story_lede,
+    build_surplus_value_chart, build_team_compare_chart,
+    build_team_spend_chart, build_value_scatter,
 )
 from dashboard_template import render_dashboard
 from mlb_snapshot_data import (
@@ -26,12 +27,13 @@ from mlb_snapshot_data import (
 def build():
     rows = add_derived_fields(PLAYER_ROWS, MARKET_RATE_PER_WAR)
 
-    chart_value = build_value_scatter(rows)
+    chart_value = build_value_scatter(rows, TEAM_NAMES)
+    chart_mvp = build_mvp_tracker(rows)
     chart_surplus = build_surplus_value_chart(rows, MARKET_RATE_PER_WAR)
     chart_team_spend = build_team_spend_chart(rows, TEAM_PAYROLL, TEAM_NAMES)
     chart_compare = build_team_compare_chart(rows, TEAM_NAMES)
 
-    charts = [chart_value, chart_surplus, chart_team_spend, chart_compare]
+    charts = [chart_value, chart_mvp, chart_surplus, chart_team_spend, chart_compare]
     story = build_story_lede(charts)
 
     html = render_dashboard(

@@ -18,10 +18,10 @@ Pages.
   conventions, retitled and recolored for baseball (navy/red instead of
   amber/clay, a baseball-seam mark instead of the NWSL kit's flower mark).
 - **`chart_builders.py`** — the actual chart-construction logic: League
-  Picture (WAR vs. Salary scatter), Surplus Value (bargains-vs-overpays
-  leaderboard), Team Spending vs. Production, and Compare Teammates. Shared
-  by both the demo and live paths below, so a chart-logic change is one edit,
-  not two.
+  Picture (WAR vs. Salary scatter), MVP Tracker (top-WAR leaderboard by
+  league), Surplus Value (bargains-vs-overpays leaderboard), Team Spending
+  vs. Production, and Compare Teammates. Shared by both the demo and live
+  paths below, so a chart-logic change is one edit, not two.
 - **`mlb_snapshot_data.py`** — the hand-verified 2026 snapshot: 47 players
   across 15 teams, individually checked against Baseball-Reference (WAR) and
   FanGraphs RosterResource (salary). See its docstring for exactly how and
@@ -29,9 +29,11 @@ Pages.
 - **`demo_dashboard.py`** → `dashboard_demo.html` / `index.html` — builds the
   dashboard from that snapshot. **This is what's currently deployed.**
 - **`mlb_data.py`** / **`build_dashboard.py`** → `dashboard.html` — the LIVE
-  version: pulls the full league via `pybaseball` (FanGraphs WAR
-  leaderboards) + a RosterResource salary scraper. Run this on your own
-  machine to replace the curated snapshot with real full-league coverage.
+  version: pulls the full league by scraping Baseball-Reference directly for
+  WAR and Spotrac's per-team payroll pages for salary (both confirmed
+  reachable and working against live data — see "Getting live data working"
+  below for the history). Run this on your own machine to replace the
+  curated snapshot with real full-league coverage.
 - **`run_weekly_update.sh`** / **`.ps1`** — thin wrappers around
   `build_dashboard.py` for a scheduled (cron / Task Scheduler) weekly
   refresh that also pushes to GitHub Pages.
@@ -56,11 +58,55 @@ active roster players without real transcription risk. See
 `mlb_snapshot_data.py`'s docstring for the full method and sourcing.
 
 **The fix is exactly the NWSL kit's fix: run the real script on your own
-machine.** `build_dashboard.py` uses `pybaseball` (a proper Python package
-wrapping FanGraphs' actual data endpoints) and `requests`/`pandas` against
-RosterResource directly — normal library calls over a normal internet
-connection, no page-fetching-tool transcription risk, covering all 30 teams
-in about a minute.
+machine.** `build_dashboard.py` uses plain `requests`/`pandas` against
+Baseball-Reference (WAR) and Spotrac (salary) directly — normal library
+calls over a normal internet connection, no page-fetching-tool transcription
+risk, covering all 30 teams in about a minute. (Originally this used
+`pybaseball` against FanGraphs and RosterResource instead — see "Getting
+live data working" below for why that changed.)
+
+## Getting live data working: the FanGraphs → Baseball-Reference/Spotrac story
+
+A real run on 2026-08-13 surfaced something the sandbox that built this kit
+couldn't have caught: **FanGraphs now returns HTTP 403 to scripted
+requests** — confirmed via a direct diagnostic (`requests.get` with a normal
+browser User-Agent) hitting both `pybaseball`'s FanGraphs leaderboard call
+and the RosterResource payroll pages, and confirmed to also defeat
+[`cloudscraper`](https://github.com/venomous/cloudscraper) (a library built
+specifically to get past Cloudflare-style anti-bot pages) — so FanGraphs is
+running something more robust than a basic challenge page. This isn't
+specific to this project — [pybaseball issue
+#479](https://github.com/jldbc/pybaseball/issues/479) and [baseballr issue
+#397](https://github.com/billpetti/baseballr/issues/397) (tagged
+`upstream-fangraphs`) show the same block hitting other tools.
+
+Both halves of `mlb_data.py` were rewritten to use different sources
+entirely, and **both are now confirmed working against live data** as of
+2026-08-13:
+
+1. **WAR** — scrapes Baseball-Reference's Player Value tables directly
+   (`fetch_war_leaderboards`), using `requests` + `pandas`. Confirmed live:
+   881 players fetched in a real run (the real column names turned out to be
+   `Player`/`Team`, not `Name`/`Tm` as first guessed — `mlb_data.py` tries
+   both namings, see `NAME_TEAM_COL_CANDIDATES`).
+2. **Salary** — scrapes Spotrac's per-team payroll pages directly
+   (`fetch_team_payroll`), using plain `requests` (Spotrac returns a normal
+   200, no cloudscraper needed). Confirmed live: a diagnostic dump of the
+   Yankees payroll page showed the real page has several tables (active
+   roster, injured list, dead-money for traded/waived/released players, a
+   reserve/arbitration list, and a non-player payroll-summary table) —
+   `fetch_team_payroll` pulls from every table that has both a `Player`-ish
+   column and an exact `Payroll Salary` column, and cleans roster-status
+   text (`"10-DAY IL"`, `"TRADED (MIL)"`, etc.) out of the name cells. See
+   `mlb_data.py`'s docstrings for the full detail.
+
+If Spotrac ever changes its page layout or starts blocking requests too,
+`fetch_all_payrolls` will tell you (every team fails with the same error) —
+at that point, either inspect a team's URL in a browser and update
+`fetch_team_payroll` to match the new structure, or fall back to a manual
+export (open each team's payroll page in your own browser, copy the table
+into a spreadsheet, and point `fetch_team_payroll` at a local CSV instead of
+a URL).
 
 ## Run it yourself
 
@@ -72,35 +118,55 @@ python build_dashboard.py          # pulls the FULL league live (~1 min, needs i
 
 `build_dashboard.py` flags: `--season` (default 2026), `--min-pa` / `--min-ip`
 (playing-time floor before a player is fetched at all, default 100 PA / 20
-IP), `--min-war` (drop below-threshold players from the League Picture chart
-after fetching, default 0 — the Surplus Value leaderboard is unaffected
-either way since it's already capped to the top/bottom N).
+IP), `--min-war` (optionally drop players below this WAR from the League
+Picture scatter *only* — every other tab always uses the full matched set.
+Unset by default, so below-replacement players aren't dropped anywhere
+unless you explicitly ask for a floor; they're real, and they're exactly
+what the Surplus Value tab's "biggest overpay" side is supposed to surface).
 
-**This script's exact code path hasn't been run end-to-end before you run
-it** — the sandbox that wrote it couldn't reach pybaseball's or
-RosterResource's live responses to verify column names and table structure
-against real data. Treat your first run as the actual test. If something's
-off, `mlb_data.py`'s docstring says where to look (almost certainly a column
-rename in `FG_WAR_COL` or a team slug in `RR_TEAM_SLUGS` — FanGraphs/
-RosterResource change these rarely, but it happens).
+Both halves of this pipeline (Baseball-Reference for WAR, Spotrac for
+salary) have been confirmed working end-to-end against live data as of
+2026-08-13 — see "Getting live data working" above for the history. If a
+future run breaks, it's most likely one of these sites having changed its
+page layout; `mlb_data.py`'s docstrings say exactly what each function
+expects to find (column names, table-qualification rules) so you know what
+changed.
 
-## The four tabs
+## The five tabs
 
-1. **League Picture** — every tracked player, WAR (up) vs. salary (right).
-   Dashed median lines split the sample into quadrants; top-left is the
-   "cheap and great" corner, bottom-right is "expensive and
-   underperforming." One point is highlighted: the best WAR-per-dollar
-   return in the sample.
-2. **Surplus Value** — a leaderboard of `(WAR × assumed $/WAR) − salary`,
+1. **League Picture** — every tracked player, WAR (up) vs. salary (right,
+   **log-scaled** — salary spans roughly two orders of magnitude, from
+   league-minimum to $70M+, and a linear axis crushes almost everyone into
+   a sliver near zero). Dashed median lines split the sample into
+   quadrants; top-left is the "cheap and great" corner, bottom-right is
+   "expensive and underperforming." A solid line at 0 WAR marks replacement
+   level when the sample includes below-replacement players. One point is
+   highlighted: the best WAR-per-dollar return in the sample. Past 60
+   players, per-point team-abbreviation labels give way to small unlabeled
+   dots (identity via the hover tooltip instead) — a few hundred 3-letter
+   badges simply can't all fit on one chart legibly. A **Team dropdown**
+   above the chart highlights one team's players against the full-league
+   backdrop (rather than filtering the rest away) — the point of this chart
+   is seeing a roster relative to the whole league, which a filtered view
+   would lose.
+2. **MVP Tracker** — the top 10 players by WAR in each league, one league
+   at a time via a dropdown (defaults to whichever league has the single
+   highest-WAR player, so it opens on the more compelling race). This isn't
+   an official stat — there's no ballot data here — but a league's top-WAR
+   leaderboard is the standard sabermetric stand-in for the MVP
+   conversation. Pitchers are included, since WAR puts them on the same
+   scale as hitters, even though real MVP voting leans toward position
+   players in practice; that caveat is in the tab's own footnote.
+3. **Surplus Value** — a leaderboard of `(WAR × assumed $/WAR) − salary`,
    showing the biggest bargains and the biggest overpays side by side. The
    $/WAR rate is a single blended constant (see below) — real front offices
    tier it by player caliber, which is a natural next step here too.
-3. **Team Spending vs. Production** — team payroll vs. this sample's total
+4. **Team Spending vs. Production** — team payroll vs. this sample's total
    WAR on that roster. Explicitly labeled as sample coverage, not a true
    team-WAR total, since the underlying player set isn't every player on
    every 40-man roster (the live path gets much closer to that than the
    demo snapshot does).
-4. **Compare Teammates** — pick a team, pick WAR / Salary / Surplus, see
+5. **Compare Teammates** — pick a team, pick WAR / Salary / Surplus, see
    that roster's tracked players ranked.
 
 ## The $/WAR assumption
@@ -174,7 +240,7 @@ push automatically each time they run.
 **What's public:** the whole repo (source + dashboard) is visible to anyone
 with the link — that's how GitHub Pages' free tier works. Nothing here is
 sensitive; it's public MLB stats and salary figures already published by
-Baseball-Reference/FanGraphs/RosterResource, plus open-source-style code.
+Baseball-Reference/FanGraphs/Spotrac, plus open-source-style code.
 
 ## Where to go next
 

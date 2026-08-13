@@ -1,52 +1,52 @@
 """
 Live data-fetching helpers for the "Diamond Dollars" dashboard -- run on YOUR
-machine (unrestricted network), not in the cloud sandbox that built this kit
-(see README "Why the live path has to run on your machine"). Two sources:
+machine (unrestricted network), not in the cloud sandbox that built this kit.
 
-1. WAR (bWAR-style value stats) via `pybaseball`, which wraps FanGraphs'
-   season leaderboards (pip install pybaseball; wraps requests + pandas
-   under the hood, no scraping code of your own needed).
-2. Salary via a small RosterResource scraper (pandas.read_html against
-   FanGraphs' public per-team payroll pages) -- pybaseball itself has no
-   salary endpoint, so this part is custom, kept in this file rather than
-   inline in build_dashboard.py for the same one-function-one-job reason
-   chart_builders.py exists.
+**History (see README for the full story):** this file originally pulled WAR
+via pybaseball (FanGraphs) and salary via FanGraphs RosterResource. A real
+run on 2026-08-13 found FanGraphs now blocks scripted requests site-wide
+(HTTP 403, confirmed with `cloudscraper` too, not just plain `requests` --
+matches a known, current, upstream issue affecting other MLB scraping tools).
+Both halves were switched to different, confirmed-reachable sources:
 
-**Not verified against a live run.** The cloud sandbox that wrote this kit
-can't reach pybaseball's PyPI-installed package's actual network calls or
-fangraphs.com directly (see README) -- pybaseball's column names, and
-RosterResource's HTML table structure, were confirmed by fetching sample
-pages through a page-fetching tool rather than by running this exact code
-path end to end. Treat the first real run as the actual test: if a column
-name or team slug is off, the fix is almost certainly a one-line rename in
-FG_WAR_COL / RR_TEAM_SLUGS below, not a structural problem. Please report
-back (or just fix and keep going) if you hit one.
+1. WAR: Baseball-Reference's Player Value tables (`requests` + `pandas`,
+   confirmed reachable and confirmed correct table/column detection against
+   live data on 2026-08-13 -- 881 players fetched successfully).
+2. Salary: Spotrac's per-team payroll pages (confirmed reachable AND its
+   real table structure inspected against live data on 2026-08-13 -- see
+   `fetch_team_payroll`'s docstring for the specifics of what that page
+   actually looks like, which turned out to be messier than RosterResource
+   was: multiple sub-tables per team, player names bundled with roster-
+   status text that needs cleaning).
 """
 
+import io
 import re
 import time
 
 import pandas as pd
 import requests
 
-# pybaseball's FanGraphs leaderboard WAR column is literally "WAR" in both
-# batting_stats() and pitching_stats() as of the version this was written
-# against -- kept as a constant here in case that ever changes upstream.
-FG_WAR_COL = "WAR"
+BROWSER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
-# FanGraphs RosterResource payroll page slugs, one per team. FanGraphs uses
-# its own 3-letter team codes in batting_stats()/pitching_stats() output
-# (e.g. "CHC", "NYY") -- this dict's keys match those, mapped to the URL
-# slug RosterResource uses at fangraphs.com/roster-resource/payroll/<slug>.
-RR_TEAM_SLUGS = {
-    "ARI": "diamondbacks", "ATL": "braves", "BAL": "orioles", "BOS": "red-sox",
-    "CHC": "cubs", "CHW": "white-sox", "CIN": "reds", "CLE": "guardians",
-    "COL": "rockies", "DET": "tigers", "HOU": "astros", "KCR": "royals",
-    "LAA": "angels", "LAD": "dodgers", "MIA": "marlins", "MIL": "brewers",
-    "MIN": "twins", "NYM": "mets", "NYY": "yankees", "ATH": "athletics",
-    "PHI": "phillies", "PIT": "pirates", "SDP": "padres", "SFG": "giants",
-    "SEA": "mariners", "STL": "cardinals", "TBR": "rays", "TEX": "rangers",
-    "TOR": "blue-jays", "WSN": "nationals",
+
+def _slugify_team_name(full_name):
+    """"New York Yankees" -> "new-york-yankees", matching Spotrac's URL
+    pattern (confirmed against a live fetch of that exact slug on
+    2026-08-13). A handful of teams may not follow this exact pattern (the
+    Athletics' current city branding in particular is a moving target) --
+    if a team 404s, check its real URL on spotrac.com and add an override
+    to SPOTRAC_SLUG_OVERRIDES below rather than fighting the slugify logic."""
+    s = full_name.lower().replace(".", "").replace("'", "")
+    return re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+
+
+SPOTRAC_SLUG_OVERRIDES = {
+    # "ATH": "oakland-athletics",  # uncomment/adjust if "athletics" 404s
 }
 
 TEAM_NAMES = {
@@ -62,28 +62,117 @@ TEAM_NAMES = {
     "TEX": "Texas Rangers", "TOR": "Toronto Blue Jays", "WSN": "Washington Nationals",
 }
 
+SPOTRAC_TEAM_SLUGS = {
+    abbr: SPOTRAC_SLUG_OVERRIDES.get(abbr, _slugify_team_name(name))
+    for abbr, name in TEAM_NAMES.items()
+}
 
-def fetch_war_leaderboards(season, qual=1):
+
+def _read_tables(html):
+    """pandas.read_html, retrying with HTML comment markers stripped --
+    Baseball-Reference wraps some of its tables in <!-- --> specifically to
+    deter naive scraping. The main Player Value tables have NOT been
+    observed to need this (confirmed reachable directly during this kit's
+    build), but this is a cheap, harmless safety net if that ever changes.
+    Wrapped in io.StringIO explicitly -- passing a raw string to
+    pandas.read_html is deprecated (and, worse, pandas sometimes tries to
+    interpret a literal HTML string as a filepath/URL if it doesn't sniff
+    unambiguously as markup, which raises a confusing FileNotFoundError)."""
+    try:
+        return pd.read_html(io.StringIO(html))
+    except ValueError:
+        return pd.read_html(io.StringIO(html.replace("<!--", "").replace("-->", "")))
+
+
+def _flatten_columns(df):
+    """Baseball-Reference sometimes returns a MultiIndex header (grouped
+    column headers) -- collapse to the last non-empty level so "WAR" stays
+    "WAR" instead of becoming a tuple."""
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [str(c[-1]) if str(c[-1]) not in ("", "nan") else str(c[0]) for c in df.columns]
+    return df
+
+
+# Baseball-Reference has used both of these header namings across its
+# tables/years for the same two columns -- (name-column, team-column) pairs
+# to try in order. A real run on 2026-08-13 confirmed the Player Value
+# tables use "Player"/"Team" (NOT "Name"/"Tm", which was this file's
+# original guess) -- both are kept here so either naming matches, since BR
+# hasn't been fully consistent about it across different report types.
+NAME_TEAM_COL_CANDIDATES = [("Name", "Tm"), ("Player", "Team")]
+
+
+def _find_table_with_columns(tables, war_col="WAR"):
+    """Scans every table for one containing a name column, a team column
+    (either naming convention above), and `war_col`. Returns the table with
+    its columns RENAMED to the canonical "Name"/"Tm" so every caller
+    downstream doesn't need to care which naming this particular page
+    used."""
+    for t in tables:
+        t = _flatten_columns(t)
+        cols = set(str(c) for c in t.columns)
+        for name_col, team_col in NAME_TEAM_COL_CANDIDATES:
+            if {name_col, team_col, war_col}.issubset(cols):
+                return t.rename(columns={name_col: "Name", team_col: "Tm"})
+    return None
+
+
+def fetch_war_table(season, kind):
+    """kind: "batting" or "pitching". Returns a DataFrame with at least
+    Name/Tm/WAR columns (normalized -- see _find_table_with_columns),
+    scraped directly from Baseball-Reference's Player Value pages
+    (confirmed reachable with a browser-like User-Agent as of 2026-08-13 --
+    see this file's module docstring for why this replaced the
+    pybaseball/FanGraphs path). Drops multi-team aggregate rows (Tm ==
+    "2TM"/"3TM" etc.) since those can't be matched to a single team's
+    payroll -- a small fraction of rows (players traded mid-season), each
+    of which still has a separate per-team row in the same table."""
+    url = f"https://www.baseball-reference.com/leagues/majors/{season}-value-{kind}.shtml"
+    resp = requests.get(url, headers=BROWSER_HEADERS, timeout=30)
+    resp.raise_for_status()
+    # Baseball-Reference doesn't declare a charset in its Content-Type
+    # header, so `requests` falls back to guessing -- and guesses wrong for
+    # this page (Latin-1 instead of the page's actual UTF-8), which mangles
+    # every accented name into mojibake ("José Ramírez" -> "JosÃ© RamÃ­rez").
+    # Confirmed live on 2026-08-13: this was silently dropping every accented
+    # name from the salary match (mangled name never matches Spotrac's
+    # correctly-encoded one). Forcing UTF-8 explicitly fixes it.
+    resp.encoding = "utf-8"
+    tables = _read_tables(resp.text)
+    df = _find_table_with_columns(tables)
+    if df is None:
+        raise RuntimeError(
+            f"Couldn't find a table with a name/team/WAR column on {url}. "
+            f"Found {len(tables)} tables with columns: {[list(t.columns) for t in tables]}. "
+            "Baseball-Reference may have changed its layout -- check the URL in a browser, "
+            "find the actual column names, and add them to NAME_TEAM_COL_CANDIDATES above."
+        )
+    df = df[~df["Tm"].astype(str).str.match(r"^\d?TM$", na=False)]
+    df = df[df["Name"].notna() & (df["Name"].astype(str) != "Name")]  # drop repeated header rows
+    return df
+
+
+def fetch_war_leaderboards(season, min_pa=0, min_ip=0):
     """Returns a list of {"name", "team", "role", "war"} dicts covering
-    every qualifying batter and pitcher in FanGraphs' `season` leaderboard.
-    qual=1 means "no minimum" (pybaseball's convention -- pass a higher
-    number, or "y" for the league's own qualification cutoff, to shrink the
-    pool). Requires `pip install pybaseball`."""
-    import pybaseball  # imported lazily so the rest of this module can be
-    pybaseball.cache.enable()  # inspected/imported without pybaseball installed
-
-    bat = pybaseball.batting_stats(season, qual=qual)
-    pit = pybaseball.pitching_stats(season, qual=qual)
+    Baseball-Reference's `season` batting + pitching Player Value tables,
+    filtered to min_pa plate appearances / min_ip innings pitched (BR's own
+    PA/IP columns, applied here rather than relying on pybaseball's old
+    `qual` param, which this file no longer uses)."""
+    bat = fetch_war_table(season, "batting")
+    pit = fetch_war_table(season, "pitching")
+    if min_pa and "PA" in bat.columns:
+        bat = bat[pd.to_numeric(bat["PA"], errors="coerce").fillna(0) >= min_pa]
+    if min_ip and "IP" in pit.columns:
+        pit = pit[pd.to_numeric(pit["IP"], errors="coerce").fillna(0) >= min_ip]
 
     rows = []
     for _, r in bat.iterrows():
-        rows.append({"name": r["Name"], "team": r["Team"], "role": "batter", "war": float(r[FG_WAR_COL])})
+        rows.append({"name": str(r["Name"]).strip("*# "), "team": r["Tm"], "role": "batter", "war": float(r["WAR"])})
     for _, r in pit.iterrows():
-        rows.append({"name": r["Name"], "team": r["Team"], "role": "pitcher", "war": float(r[FG_WAR_COL])})
+        rows.append({"name": str(r["Name"]).strip("*# "), "team": r["Tm"], "role": "pitcher", "war": float(r["WAR"])})
 
-    # Two-way players (Ohtani) show up once in each table under the same
-    # name/team -- merge into a single "two-way" row with combined WAR
-    # rather than letting one person occupy two bubbles on the same chart.
+    # Two-way players (Ohtani) show up once per table under the same
+    # name/team -- merge into a single "two-way" row with combined WAR.
     by_name_team = {}
     for r in rows:
         key = (r["name"], r["team"])
@@ -96,63 +185,134 @@ def fetch_war_leaderboards(season, qual=1):
     return list(by_name_team.values())
 
 
-def fetch_team_payroll(team_abbr, pause=1.0):
-    """Scrapes one team's RosterResource payroll page: returns
-    (player_salary: {name: dollars}, total_payroll: float or None).
-    `pause` is a polite delay between calls when looping over all 30 teams
-    (see fetch_all_payrolls) -- RosterResource is a public page, not an API,
-    so don't hammer it.
+# Matches a roster-status marker and everything after it, so it can just be
+# cut off the end of a name cell. Written as "first status word onward"
+# rather than "split on double-spaces", because pandas.read_html collapses
+# runs of whitespace between a table cell's sub-elements down to a single
+# space (confirmed against a real parse during this kit's build) -- so the
+# raw cell text can't be trusted to preserve Spotrac's own internal spacing
+# as a delimiter. Cutting from the first recognized status word onward is
+# robust to that collapsing either way.
+_STATUS_SUFFIX_RE = re.compile(
+    r"\b(TRADED|WAIVED|RELEASED|NTC|DISABLED|SUSPENDED|RETIRED|DFA|OPTIONED|"
+    r"ANNIVERSARY|ASSIGNED|OUTRIGHTED|DESIGNATED|RESERVE|MINORS|"
+    r"\d{1,2}-DAY|IL)\b.*$",
+    re.IGNORECASE,
+)
 
-    Table structure (per a manual check of a handful of teams while writing
-    this kit): each page has 2-4 tables -- "guaranteed", "arbitration-eligible",
-    "pre-arbitration"/"not yet arbitration eligible", and sometimes "no
-    longer on 40-man roster". This grabs every table pandas can find and
-    takes the first two columns of each as (player, salary) -- if
-    RosterResource changes its layout this is the first thing to check."""
-    slug = RR_TEAM_SLUGS[team_abbr]
-    url = f"https://www.fangraphs.com/roster-resource/payroll/{slug}"
-    resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0 (personal sabermetrics dashboard)"})
+
+def _extract_clean_name(raw):
+    """Spotrac's player-name cell isn't just a name -- it's whatever text
+    was in that <td>, and the format actually varies by which sub-table it's
+    in (confirmed via a live diagnostic dump of the Astros payroll page on
+    2026-08-13, which caught a real bug the first version of this function
+    missed -- see below):
+
+    - Active roster / injured list / dead-money tables prefix the display
+      name with a sort-key last name: "Altuve  Jose Altuve", "Correa
+      Carlos Correa  60-DAY: ANKLE", "Witt  Bobby Witt Jr.". Naively
+      stripping only the status suffix left "Alvarez Yordan Alvarez" for
+      Yordan Alvarez, which then failed to match Baseball-Reference's
+      "Yordan Alvarez" downstream -- silently dropping ~90% of players in a
+      real run, since this pattern covers the whole active roster, not an
+      edge case.
+    - The reserve/40-man-depth table has no such prefix: "1 Jake Meyers" is
+      just a rank number + the real name.
+
+    Strategy: strip a leading rank-number prefix, cut everything from the
+    first recognized roster-status word onward (see _STATUS_SUFFIX_RE),
+    then check whether the first remaining word reappears later in the
+    string -- if so, that first word is the sort-key duplicate (not part of
+    the display name) and gets dropped; a suffix like "Jr." naturally stays
+    since it comes after the duplicate. If no such repeat is found, the text
+    is assumed to already be a plain name and is left as-is."""
+    s = re.sub(r"^\d+\s+", "", str(raw).strip())
+    s = _STATUS_SUFFIX_RE.sub("", s).strip()
+    s = re.sub(r"\s{2,}", " ", s)
+    words = s.split()
+    if len(words) >= 3:
+        first = words[0].lower()
+        if any(w.lower() == first for w in words[1:]):
+            words = words[1:]
+    return " ".join(words) if words else None
+
+
+def _is_player_salary_table(df):
+    """A Spotrac team payroll page has several tables on it -- active
+    roster, injured list, dead money (traded/waived/released players), a
+    reserve/arbitration list, and a non-player payroll-summary table --
+    confirmed via a live diagnostic dump of the Yankees page on 2026-08-13.
+    The player-level ones share two traits: some column name starts with
+    "Player" (the exact label varies a little by sub-table) and there's an
+    exact "Payroll Salary" column (as opposed to, e.g., "Payroll Salary
+    Adjusted", which shows up on the summary table and isn't a per-player
+    dollar figure)."""
+    cols = [str(c) for c in df.columns]
+    has_player_col = any(c.strip().startswith("Player") for c in cols)
+    has_salary_col = "Payroll Salary" in cols
+    return has_player_col and has_salary_col
+
+
+def fetch_team_payroll(team_abbr, pause=1.0):
+    """Scrapes one team's Spotrac payroll page: returns (player_salary:
+    {name: dollars}, total_payroll: float or None). Spotrac returns 200 to
+    plain `requests` with a normal browser User-Agent (confirmed live on
+    2026-08-13 -- unlike FanGraphs RosterResource, see this file's module
+    docstring). Pulls salaries from every qualifying player-level table on
+    the page (active roster, injured list, dead money, reserve/arbitration
+    list) rather than just the first one, since a player on the IL or a
+    traded/released player still counts as real payroll. Team total is
+    computed as the sum of the extracted player salaries (not parsed from
+    the separate summary table), for consistency with the "partial total"
+    convention already used elsewhere in this kit -- see
+    mlb_snapshot_data.py's TEAM_PAYROLL."""
+    slug = SPOTRAC_TEAM_SLUGS[team_abbr]
+    url = f"https://www.spotrac.com/mlb/{slug}/payroll/"
+    resp = requests.get(url, timeout=30, headers=BROWSER_HEADERS)
     resp.raise_for_status()
-    html = resp.text
+    # See fetch_war_table's comment on the same line -- forcing UTF-8
+    # explicitly rather than trusting requests' charset guess. Not observed
+    # to be a problem on Spotrac's pages specifically (the live diagnostic
+    # sample didn't include an accented name), but it's a one-line guard
+    # against the same class of bug for the teams that do have one.
+    resp.encoding = "utf-8"
+    tables = _read_tables(resp.text)
 
     salaries = {}
-    try:
-        tables = pd.read_html(html)
-    except ValueError:
-        tables = []
     for t in tables:
-        if t.shape[1] < 2:
+        t = _flatten_columns(t)
+        if not _is_player_salary_table(t):
             continue
-        name_col, salary_col = t.columns[0], t.columns[1]
+        player_col = next(c for c in t.columns if str(c).strip().startswith("Player"))
         for _, row in t.iterrows():
-            name = str(row[name_col]).strip()
-            raw = str(row[salary_col])
+            name = _extract_clean_name(row[player_col])
+            raw = str(row["Payroll Salary"])
             match = re.search(r"[\d,]+", raw.replace("$", ""))
-            if not name or name.lower() == "nan" or not match:
+            if not name or not match:
                 continue
             salaries[name] = float(match.group(0).replace(",", ""))
 
-    total = None
-    m = re.search(r"Estimated Total (?:2\d{3} )?Payroll[:\s]*\$?([\d,.]+)\s*(million|M)?", html, re.IGNORECASE)
-    if m:
-        val = float(m.group(1).replace(",", ""))
-        total = val * 1_000_000 if (m.group(2) or "").lower().startswith("m") and val < 10_000 else val
-
+    total = sum(salaries.values()) if salaries else None
     time.sleep(pause)
     return salaries, total
 
 
 def fetch_all_payrolls(team_abbrs=None):
     """Loops fetch_team_payroll over every team (or a subset). Returns
-    {abbr: {"salaries": {name: dollars}, "total": float or None}}. Takes
-    ~30-60 seconds for all 30 teams given the polite per-team pause."""
-    team_abbrs = team_abbrs or list(RR_TEAM_SLUGS.keys())
-    out = {}
+    {abbr: {"salaries": {name: dollars}, "total": float or None}}."""
+    team_abbrs = team_abbrs or list(SPOTRAC_TEAM_SLUGS.keys())
+    out, failures = {}, 0
     for abbr in team_abbrs:
         try:
             salaries, total = fetch_team_payroll(abbr)
             out[abbr] = {"salaries": salaries, "total": total}
             print(f"  {abbr}: {len(salaries)} players, total ${total/1e6:.0f}M" if total else f"  {abbr}: {len(salaries)} players, total unknown")
         except Exception as e:
-            print(f"  {abbr}: FAILED ({e}) -- skipping, check RR_TEAM_SLUGS / page structure")
+            failures += 1
+            print(f"  {abbr}: FAILED ({e})")
+    if failures == len(team_abbrs) and failures > 0:
+        print("\nEvery team failed -- Spotrac may have changed its page layout, or started "
+              "blocking requests too. Open one team's URL in a browser (printed in the FAILED "
+              "lines above) and compare its table structure against this file's "
+              "fetch_team_payroll docstring.")
     return out
