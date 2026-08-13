@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+history/
+.pybaseball_cache/
+weekly_update.log
