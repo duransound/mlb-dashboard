@@ -126,6 +126,13 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   .tooltip .name {{ font-weight: 600; margin-bottom: 2px; }}
   .tooltip .row {{ color: #d8d8d4; }}
   .footnote {{ font-size: 11px; color: var(--text-muted); margin-top: 14px; }}
+  /* Per-chart data credit -- see SOURCE_* in chart_builders.py. */
+  .zoom-note {{ font-size: 11.5px; color: var(--text-secondary); margin: 2px 0 10px; }}
+  .source-line {{ font-size: 10.5px; color: var(--text-muted); margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--grid); }}
+  .source-line a {{ color: var(--series-1-dark); text-decoration: none; border-bottom: 1px solid var(--grid); }}
+  .source-line a:hover {{ border-bottom-color: var(--series-1); }}
+  .page-footer {{ font-size: 11px; color: var(--text-muted); margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--grid); line-height: 1.6; }}
+  .page-footer a {{ color: var(--series-1-dark); text-decoration: none; border-bottom: 1px solid var(--grid); }}
   /* Team Stories roster -- see drawTeamStory. */
   .team-meta {{ font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); margin: 14px 0 8px; }}
   .roster {{ margin-top: 6px; border-top: 1px solid var(--grid); }}
@@ -214,6 +221,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   </div>
 {story_block}  <div class="tabs" id="tabs"></div>
   <div id="panels"></div>
+  <p class="page-footer">{footer}</p>
 </div>
 <div class="tooltip" id="tooltip"></div>
 <script>
@@ -284,22 +292,39 @@ function drawDivergingBar(container, cfg) {{
   // other behaviour -- sorting, click-to-highlight, member rosters -- is
   // inherited rather than reimplemented.
   if (cfg.groups) {{
-    const labels = Object.keys(cfg.groups);
+    // Multi-axis group picker. cfg.groupAxes is a list of
+    // {{label, options}}; one <select> is rendered per axis and the chosen
+    // values are joined with \u001f to look up cfg.groups. One axis gives the
+    // single dropdown The Rising Cost of a Win uses; two give Paid vs.
+    // Produced its Team x Contract status grid.
+    //
+    // Combinations can be legitimately empty (a team with nobody in the
+    // $30M+ bracket), so a missing key is a normal state with its own
+    // message, not an error.
+    const axes = cfg.groupAxes || [{{
+      label: cfg.groupLabel || "View",
+      options: Object.keys(cfg.groups),
+    }}];
+    const SEP = "\u001f";
+    const defaults = (cfg.defaultGroup || "").split(SEP);
     const pickerRow = document.createElement("div");
     pickerRow.className = "picker-row";
-    const group = document.createElement("div");
-    group.className = "picker-group";
-    const lab = document.createElement("div");
-    lab.className = "picker-label";
-    lab.textContent = cfg.groupLabel || "View";
-    const sel = document.createElement("select");
-    labels.forEach(l => {{
-      const opt = el2("option", {{value: l}});
-      opt.textContent = l;
-      sel.appendChild(opt);
+    const selects = axes.map((axis, i) => {{
+      const group = document.createElement("div");
+      group.className = "picker-group";
+      const lab = document.createElement("div");
+      lab.className = "picker-label";
+      lab.textContent = axis.label;
+      const sel = document.createElement("select");
+      axis.options.forEach(o => {{
+        const opt = el2("option", {{value: o}});
+        opt.textContent = o;
+        sel.appendChild(opt);
+      }});
+      sel.value = axis.options.includes(defaults[i]) ? defaults[i] : axis.options[0];
+      group.appendChild(lab); group.appendChild(sel); pickerRow.appendChild(group);
+      return sel;
     }});
-    sel.value = cfg.defaultGroup && labels.includes(cfg.defaultGroup) ? cfg.defaultGroup : labels[0];
-    group.appendChild(lab); group.appendChild(sel); pickerRow.appendChild(group);
     container.appendChild(pickerRow);
 
     const caption = document.createElement("p");
@@ -317,14 +342,22 @@ function drawDivergingBar(container, cfg) {{
     const baseTitle = h2 ? h2.textContent : null;
 
     const renderGroup = () => {{
-      const g = cfg.groups[sel.value];
+      const key = selects.map(s => s.value).join(SEP);
+      const g = cfg.groups[key];
+      mount.innerHTML = "";
+      if (!g) {{
+        if (h2) h2.textContent = baseTitle;
+        caption.innerHTML = cfg.emptyGroupNote ||
+          "No players match this combination.";
+        return;
+      }}
       if (h2) h2.textContent = g.title || baseTitle;
       caption.innerHTML = g.caption || "";
-      mount.innerHTML = "";
-      drawDivergingBar(mount, {{...cfg, groups: null, members: g.members || cfg.members,
+      drawDivergingBar(mount, {{...cfg, groups: null, groupAxes: null,
+                               members: g.members || cfg.members,
                                data: g.data.map(d => ({{...d}}))}});
     }};
-    sel.addEventListener("change", renderGroup);
+    selects.forEach(sel => sel.addEventListener("change", renderGroup));
     renderGroup();
     return;
   }}
@@ -653,6 +686,8 @@ function drawScatter(container, cfg) {{
   // filtered-down view would throw away.
   const hasTeams = cfg.data.some(d => d.team);
   let chartMount = container;
+  let zoomSelect = null;
+  let zoomEl = null;
   if (hasTeams) {{
     const pickerRow = document.createElement("div");
     pickerRow.className = "picker-row";
@@ -685,6 +720,34 @@ function drawScatter(container, cfg) {{
     const caption = document.createElement("p");
     caption.className = "compare-caption team-blurb";
     container.appendChild(caption);
+
+    // Salary-range zoom. Hundreds of players sit inside a band a few hundred
+    // thousand dollars wide at the league minimum; even on a log axis that
+    // pile occupies a sliver of the chart. Zooming restricts the x-domain to
+    // one band and lets the axis rescale to it, which spreads the crowd
+    // across the full width. Nothing is moved or invented -- points outside
+    // the band are removed and counted, and every position stays true.
+    if (cfg.zoomBands && cfg.zoomBands.length) {{
+      const zoomGroup = document.createElement("div");
+      zoomGroup.className = "picker-group";
+      const zoomLabel = document.createElement("div");
+      zoomLabel.className = "picker-label";
+      zoomLabel.textContent = cfg.zoomLabel || "Salary range";
+      zoomSelect = document.createElement("select");
+      cfg.zoomBands.forEach((band, i) => {{
+        const opt = el2("option", {{value: String(i)}});
+        opt.textContent = band.label;
+        zoomSelect.appendChild(opt);
+      }});
+      zoomSelect.value = "0";
+      zoomGroup.appendChild(zoomLabel);
+      zoomGroup.appendChild(zoomSelect);
+      pickerRow.appendChild(zoomGroup);
+      zoomSelect.addEventListener("change", () => {{ activeCid = null; renderOnce(); }});
+      zoomEl = document.createElement("p");
+      zoomEl.className = "zoom-note";
+      container.appendChild(zoomEl);
+    }}
 
     chartMount = document.createElement("div");
     container.appendChild(chartMount);
@@ -727,6 +790,30 @@ function drawScatter(container, cfg) {{
       data = cfg.data;
     }} else {{
       data = cfg.data.map(d => ({{...d, highlight: d.__cid === activeCid}}));
+    }}
+
+    // Apply the salary-range zoom, if one is picked. Filtering (rather than
+    // clamping) is what lets the axis rescale to the band, which is the
+    // whole point -- and the count of what fell outside is reported rather
+    // than quietly dropped.
+    let zoomNote = "";
+    if (zoomSelect && cfg.zoomBands) {{
+      const band = cfg.zoomBands[Number(zoomSelect.value) || 0];
+      if (band && (band.min !== undefined || band.max !== undefined)) {{
+        const lo = band.min === undefined ? -Infinity : band.min;
+        const hi = band.max === undefined ? Infinity : band.max;
+        const before = data.length;
+        data = data.filter(d => d.x >= lo && d.x < hi);
+        const hidden = before - data.length;
+        // Label first, verbatim -- lowercasing it turned "$1M" into "$1m".
+        zoomNote = `${{band.label}} — ${{data.length}} player${{data.length === 1 ? "" : "s"}} shown` +
+                   (hidden ? `, ${{hidden}} outside this range hidden.` : ".");
+      }}
+    }}
+    if (zoomEl) zoomEl.textContent = zoomNote;
+    if (!data.length) {{
+      if (zoomEl) zoomEl.textContent = "No tracked players in this salary range.";
+      return;
     }}
 
     const margin = {{top: 12, right: 24, bottom: 46, left: 58}};
@@ -1129,8 +1216,14 @@ function drawAwardsRace(container, cfg) {{
   const award = picker("Award", awardNames.map(a => [a, a]));
   const league = picker("League", [["AL", "American League"], ["NL", "National League"]]);
   const field = picker("Who counts", []);
+  const lenses = cfg.lenses || ["Pure WAR"];
+  const lens = picker("Team context", lenses.map(l => [l, l]));
   award.sel.value = cfg.defaultAward || awardNames[0];
   league.sel.value = cfg.defaultLeague || "AL";
+  lens.sel.value = lenses.includes(cfg.defaultLens) ? cfg.defaultLens : lenses[0];
+  // With no standings every option but "Pure WAR" is undefined, so the
+  // picker is hidden rather than offered and then explained away.
+  if (lenses.length < 2) lens.group.style.display = "none";
   container.appendChild(pickerRow);
 
   const caption = document.createElement("p");
@@ -1157,28 +1250,36 @@ function drawAwardsRace(container, cfg) {{
   function render() {{
     syncFields();
     chartMount.innerHTML = "";
-    const players = (((cfg.awards[award.sel.value] || {{}})[league.sel.value]) || {{}})[field.sel.value] || [];
-    const cap = (((cfg.captions[award.sel.value] || {{}})[league.sel.value]) || {{}})[field.sel.value] || "";
-    caption.innerHTML = cap;
+    const byField = (((cfg.awards[award.sel.value] || {{}})[league.sel.value]) || {{}})[field.sel.value] || {{}};
+    const capByField = (((cfg.captions[award.sel.value] || {{}})[league.sel.value]) || {{}})[field.sel.value] || {{}};
+    const activeLens = lens.sel.value;
+    const players = byField[activeLens] || [];
+    caption.innerHTML = capByField[activeLens] || "";
     if (!players.length) {{ return; }}
     const leader = players[0];
+    const weighted = activeLens.indexOf("Weighted") === 0;
     drawDivergingBar(chartMount, {{
-      oneSided: true, valueLabel: "WAR", xAxisLabel: "WAR",
+      oneSided: true,
+      valueLabel: weighted ? "Ballot score" : "WAR",
+      xAxisLabel: weighted ? "WAR adjusted for team record" : "WAR",
       data: players.map(p => ({{
         // Team record rides in the visible label, not just the tooltip:
         // voters weigh team success heavily, so a reader scanning the
         // leaderboard should see it without hovering every bar.
         label: p.record ? `${{p.name}} (${{p.team}} ${{p.record}})` : `${{p.name}} (${{p.team}})`,
-        value: p.war,
+        value: weighted ? p.adj : p.war,
         highlight: p === leader,
+        // Under the weighted lens the raw WAR must stay visible, or the
+        // chart silently replaces a measurement with a model.
         extra: [p.role,
+                weighted ? `WAR ${{p.war.toFixed(1)}}` : null,
                 p.record ? `Team ${{p.record}}` : (p.context || ""),
                 `Salary $${{p.salary_m.toFixed(1)}}M`].filter(Boolean).join(" &middot; "),
       }})),
     }});
   }}
 
-  [award.sel, league.sel, field.sel].forEach(sel => sel.addEventListener("change", render));
+  [award.sel, league.sel, field.sel, lens.sel].forEach(sel => sel.addEventListener("change", render));
   render();
 }}
 
@@ -1452,7 +1553,8 @@ CHARTS.forEach((chart, i) => {{
   const panel = document.createElement("div");
   panel.className = "panel" + (i === 0 ? " active" : "");
   panel.id = "panel-" + i;
-  panel.innerHTML = `<p class="kicker">${{chart.metricLabel || chart.tabLabel}}</p><h2>${{chart.title}}</h2><p class="blurb">${{chart.blurb}}</p><div class="chart-mount"></div><p class="footnote">${{chart.footnote || ""}}</p>`;
+  panel.innerHTML = `<p class="kicker">${{chart.metricLabel || chart.tabLabel}}</p><h2>${{chart.title}}</h2><p class="blurb">${{chart.blurb}}</p><div class="chart-mount"></div><p class="footnote">${{chart.footnote || ""}}</p>` +
+    (chart.source ? `<p class="source-line">${{chart.source}}</p>` : "");
   panelsEl.appendChild(panel);
 
   const mount = panel.querySelector(".chart-mount");
@@ -1474,7 +1576,19 @@ CHARTS.forEach((chart, i) => {{
 """
 
 
-def render_dashboard(title, subtitle, charts, story=None, story_kicker="This week's value picture"):
+DEFAULT_FOOTER = (
+    'Built by <a href="https://github.com/duransound/mlb-dashboard" rel="noopener">Poppies in the Fog</a>. '
+    'Player value (WAR) from <a href="https://www.baseball-reference.com/" rel="noopener">Baseball-Reference</a>; '
+    'salary and payroll figures from <a href="https://www.spotrac.com/mlb/" rel="noopener">Spotrac</a>; '
+    'the $/win market benchmark from <a href="https://blogs.fangraphs.com/" rel="noopener">FanGraphs</a>. '
+    'All three are independent sources credited on every chart and in Methods &amp; Sources; '
+    'this project is not affiliated with any of them, nor with MLB. '
+    'Figures are recombined public data — see the What This Means tab for methodology and limits.'
+)
+
+
+def render_dashboard(title, subtitle, charts, story=None, story_kicker="This week's value picture",
+                     footer=None, generated=None):
     """charts: list of dicts matching the JS CHARTS shape. tooltip fields
     must be pre-rendered HTML strings per point (see build helpers below).
     story: optional short dashboard-level narrative (see
@@ -1491,6 +1605,10 @@ def render_dashboard(title, subtitle, charts, story=None, story_kicker="This wee
         )
     else:
         story_block = ""
+    footer_html = footer or DEFAULT_FOOTER
+    if generated:
+        footer_html = f"Data pulled {generated}. " + footer_html
     return PAGE_TEMPLATE.format(
         title=title, subtitle=subtitle, charts_json=json.dumps(charts), story_block=story_block,
+        footer=footer_html,
     )

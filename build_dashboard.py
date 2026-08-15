@@ -143,7 +143,7 @@ def main():
     charts = [
         build_price_of_win(rows, MARKET_RATE_PER_WAR),
         build_value_scatter(scatter_rows, TEAM_NAMES),
-        build_surplus_value_chart(rows, MARKET_RATE_PER_WAR, top_n=20, bottom_n=20),
+        build_surplus_value_chart(rows, MARKET_RATE_PER_WAR, top_n=20, bottom_n=20, team_names=TEAM_NAMES),
         build_diminishing_returns(rows, TEAM_NAMES),
         build_awards_race(rows, standings, TEAM_NAMES),
         build_payroll_efficiency(rows, team_payroll, TEAM_NAMES),

@@ -42,7 +42,7 @@ def build():
     charts = [
         build_price_of_win(rows, MARKET_RATE_PER_WAR),
         build_value_scatter(rows, TEAM_NAMES),
-        build_surplus_value_chart(rows, MARKET_RATE_PER_WAR),
+        build_surplus_value_chart(rows, MARKET_RATE_PER_WAR, team_names=TEAM_NAMES),
         build_diminishing_returns(rows, TEAM_NAMES),
         build_awards_race(rows, STANDINGS, TEAM_NAMES),
         build_payroll_efficiency(rows, TEAM_PAYROLL, TEAM_NAMES),

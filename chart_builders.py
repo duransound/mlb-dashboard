@@ -18,6 +18,40 @@ whole dollars, this is purely a presentation-layer conversion.
 """
 
 
+# ---------------------------------------------------------------------------
+# Data provenance
+#
+# Every chart carries a `source` line naming exactly where its numbers came
+# from, rendered under the chart. Sourcing lived only in the Methods panel
+# before, which meant a chart screenshotted or linked on its own travelled
+# with no attribution at all -- and these are other people's datasets.
+# ---------------------------------------------------------------------------
+
+SOURCE_LINKS = {
+    "bref": '<a href="https://www.baseball-reference.com/" rel="noopener">Baseball-Reference</a>',
+    "spotrac": '<a href="https://www.spotrac.com/mlb/" rel="noopener">Spotrac</a>',
+    "fangraphs": '<a href="https://blogs.fangraphs.com/" rel="noopener">FanGraphs</a>',
+}
+
+SRC_WAR = f'WAR: {SOURCE_LINKS["bref"]}'
+SRC_SALARY = f'salaries: {SOURCE_LINKS["spotrac"]}'
+SRC_RATE = f'$/win benchmark: {SOURCE_LINKS["fangraphs"]}'
+SRC_RECORDS = f'team records: {SOURCE_LINKS["bref"]}'
+
+
+def _source(*parts):
+    """Assembles the per-chart credit line. Kept as a helper so every chart
+    spells the sources the same way and a source URL only ever changes in
+    one place."""
+    return "Source — " + "; ".join(parts) + "."
+
+
+SOURCE_VALUE = _source(SRC_WAR, SRC_SALARY, SRC_RATE)
+SOURCE_WAR_ONLY = _source(SRC_WAR)
+SOURCE_WAR_SALARY = _source(SRC_WAR, SRC_SALARY)
+SOURCE_AWARDS = _source(SRC_WAR, SRC_RECORDS, SRC_SALARY)
+
+
 def add_derived_fields(rows, market_rate):
     """rows: list of dicts matching mlb_snapshot_data.PLAYER_ROWS' shape
     (id, name, team, role, war, salary, is_aav[, note]). Returns a NEW list
@@ -135,6 +169,7 @@ def build_value_scatter(rows, team_names=None):
     per_m = best["war"] / best["salary_m"]
     return {
         "type": "scatter", "tabLabel": "League Picture",
+        "source": SOURCE_WAR_SALARY,
         "metricLabel": "WAR vs. Salary, 2026 season",
         "title": f"{best['name']} is producing {per_m:.2f} WAR per $1M of salary — the best return in this sample",
         "blurb": (f"Every dot is a player: how many wins they've added (WAR, up the side) against what it cost "
@@ -142,10 +177,24 @@ def build_value_scatter(rows, team_names=None):
                    "production for not much money — while the bottom-right is where expensive disappointments "
                    "hide. (Salary runs on a log scale so a $2M reliever and a $35M ace don't get crushed into "
                    "the same sliver of the chart.) The dashed lines mark the sample's median WAR and median "
-                   "salary, splitting the field into those four quadrants. Pick a team from the dropdown to see "
-                   "where its roster falls in the picture."),
+                   "salary, splitting the field into those four quadrants. Pick a team to see where its "
+                   "roster falls, and use the salary-range dropdown to zoom into a pay band — a third of the "
+                   "league is packed into a few hundred thousand dollars at the minimum, and zooming spreads "
+                   "that crowd across the full width of the chart."),
         "xAxisLabel": "Salary ($M, log scale)", "yAxisLabel": "WAR", "xScaleType": "log",
         "medianLines": True, "radius": scatter_display_params(len(rows)),
+        # Salary-range zoom. Bands are chosen around real contract structure
+        # rather than even splits, because that's where the crowding is: at
+        # full-league scale roughly a third of the league sits inside a
+        # $250K-wide band at the league minimum, which even a log axis
+        # compresses into a sliver.
+        "zoomLabel": "Salary range",
+        "zoomBands": [
+            {"label": "All salaries"},
+            {"label": "Under $1M (league minimum)", "max": 1.0},
+            {"label": "$1M–$10M", "min": 1.0, "max": 10.0},
+            {"label": "$10M and up", "min": 10.0},
+        ],
         "teamNames": team_names or {},
         "teamBlurbs": build_team_blurbs(rows, team_names) if team_names else {},
         "data": [
@@ -182,29 +231,25 @@ CONTRACT_TIERS = [
 ]
 
 
-def build_surplus_value_chart(rows, market_rate, top_n=15, bottom_n=10):
+def build_surplus_value_chart(rows, market_rate, top_n=15, bottom_n=10, team_names=None):
     """Paid vs. Produced: (WAR x market_rate) minus actual salary.
 
-    REWRITTEN because the previous version presented a structural artifact as
-    a finding. A single combined leaderboard of "biggest bargains" is, in a
-    sport with a rookie wage scale, guaranteed to be topped by players who are
-    cheap BY RULE -- not by shrewd signing. On the live 872-player build the
-    median salary on the bargain side was $0.80M against $19.7M on the overpay
-    side, and 13 of the top 20 "bargains" earned under $1M. That ranking is
-    the collective bargaining agreement, not scouting insight, and calling
-    those players front-office wins was the dashboard's least honest claim.
+    Two picker axes: **Team** and **Contract status**.
 
-    The fix is to name the structural effect and let the reader compare like
-    with like: the tab now groups players by what their salary implies about
-    contract status, via a dropdown. Within "Market-priced," over- and
-    underpay really is a team decision and the leaderboard means what it
-    appears to mean. Across all contracts, it mostly measures service time --
-    which the copy now says outright instead of implying otherwise."""
+    The contract split exists because a single combined leaderboard of
+    "biggest bargains" is, in a sport with a rookie wage scale, guaranteed to
+    be topped by players who are cheap BY RULE. On the live 872-player build
+    the median salary on the bargain side was $0.80M against $19.7M on the
+    overpay side, and 13 of the top 20 "bargains" earned under $1M. That
+    ranking is the collective bargaining agreement, not scouting insight.
+    Within "Market-priced," over- and underpay really is a team decision and
+    the leaderboard means what it appears to mean.
+
+    The team axis lets a reader ask the same question of one roster. Team
+    views are small by nature, so their captions report how many players the
+    view actually contains rather than implying a league-scale ranking."""
     market_rate_m = market_rate / 1_000_000
 
-    # The population's OWN price of a win, for contrast with the assumed
-    # market rate. These are very different numbers -- most players aren't on
-    # the free-agent market -- and the footnote used to conflate them.
     total_salary_m = sum(r["salary_m"] for r in rows)
     total_war = sum(r["war"] for r in rows)
     blended_m = (total_salary_m / total_war) if total_war > 0 else None
@@ -219,45 +264,37 @@ def build_surplus_value_chart(rows, market_rate, top_n=15, bottom_n=10):
                 deduped.append(r)
         return deduped
 
-    groups = {}
-    for tier in CONTRACT_TIERS:
-        pool = rows if tier == "All contracts" else [r for r in rows if _contract_tier(r) == tier]
-        if not pool:
-            continue
+    def tier_caption(tier, deduped, scope_note):
+        positives = [r for r in deduped if r["surplus"] >= 0]
+        under_min = sum(1 for r in deduped if r["surplus"] > 0 and r["salary"] < 1_000_000)
+        if tier == "All contracts":
+            return (f"<strong>Read this one with suspicion.</strong> {under_min} of the "
+                    f"{len(positives)} players on the underpaid side earn under $1M — they're cheap "
+                    "because the rules don't allow paying them more yet, not because anyone "
+                    "out-negotiated the market. Switch to <em>Market-priced</em> for the version where "
+                    f"over- and underpay is actually a decision somebody made. {scope_note}")
+        if tier.startswith("Pre-arbitration"):
+            return ("<strong>Everyone here is underpaid by design.</strong> Pre-arbitration salaries are set "
+                    "near the league minimum regardless of production, so this ranks who has produced most, "
+                    "not who was signed most cleverly — and every name is a raise already earned and not yet "
+                    f"paid. {scope_note}")
+        if tier.startswith("Arbitration"):
+            return ("<strong>The middle years.</strong> Arbitration moves salary toward production but lags "
+                    "it, so surplus here is smaller than in the pre-arb group and more genuinely earned than "
+                    f"in the market-priced one. {scope_note}")
+        return ("<strong>This is the honest scoreboard.</strong> Everyone here is paid at or near market "
+                "value, so a big number in either direction reflects a decision somebody made — a contract "
+                f"that has aged well, or one that hasn't. {scope_note}")
+
+    def build_group(pool, tier, scope_note, title=None):
         deduped = leaderboard(pool)
         if not deduped:
-            continue
+            return None
         best = max(deduped, key=lambda r: r["surplus"])
         worst = min(deduped, key=lambda r: r["surplus"])
         extreme = best if abs(best["surplus"]) >= abs(worst["surplus"]) else worst
-
-        under_min = sum(1 for r in deduped if r["surplus"] > 0 and r["salary"] < 1_000_000)
-        positives = [r for r in deduped if r["surplus"] >= 0]
-
-        if tier == "All contracts":
-            caption = (f"<strong>Read this one with suspicion.</strong> {under_min} of the "
-                       f"{len(positives)} players on the underpaid side earn under $1M — they're cheap "
-                       "because the rules don't allow paying them more yet, not because anyone "
-                       "out-negotiated the market. Switch to <em>Market-priced</em> for the version where "
-                       "over- and underpay is actually a team's decision.")
-        elif tier.startswith("Pre-arbitration"):
-            caption = (f"<strong>Every player here is underpaid by design.</strong> These {len(deduped)} are "
-                       "on pre-arbitration contracts, where salary is set near the league minimum "
-                       "regardless of production. The ranking measures who has produced most, not who was "
-                       "signed most cleverly — and every one of them is a future raise the team has "
-                       "already earned but not yet paid for.")
-        elif tier.startswith("Arbitration"):
-            caption = ("<strong>The middle years.</strong> Arbitration moves salary toward production but "
-                       "lags it, so surplus here is smaller than in the pre-arb group and more genuinely "
-                       "earned than in the market-priced one — this is where a team's own decisions start "
-                       "to show up.")
-        else:
-            caption = ("<strong>This is the honest scoreboard.</strong> Everyone here is paid at or near "
-                       "market value, so a big positive or negative number reflects a decision somebody "
-                       "made — a contract that has aged well, or one that hasn't.")
-
-        groups[tier] = {
-            "caption": caption,
+        group = {
+            "caption": tier_caption(tier, deduped, scope_note),
             "data": [
                 {"label": f'{r["name"]} ({r["team"]})', "value": round(r["surplus_m"], 1),
                  "highlight": r["id"] == extreme["id"],
@@ -265,9 +302,49 @@ def build_surplus_value_chart(rows, market_rate, top_n=15, bottom_n=10):
                 for r in deduped
             ],
         }
+        if title:
+            group["title"] = title
+        return group
 
-    # The headline states the structural finding rather than crowning a
-    # "bargain," because the structural finding is the true one.
+    SEP = "\u001f"
+    groups = {}
+    team_options = ["All of MLB"]
+
+    for tier in CONTRACT_TIERS:
+        pool = rows if tier == "All contracts" else [r for r in rows if _contract_tier(r) == tier]
+        note = f"Drawn from all {len(pool)} tracked players in this contract group."
+        g = build_group(pool, tier, note)
+        if g:
+            groups["All of MLB" + SEP + tier] = g
+
+    if team_names:
+        by_team = {}
+        for r in rows:
+            by_team.setdefault(r["team"], []).append(r)
+        for abbr in sorted(by_team, key=lambda a: team_names.get(a, a)):
+            name = team_names.get(abbr, abbr)
+            added = False
+            for tier in CONTRACT_TIERS:
+                pool = ([r for r in by_team[abbr]] if tier == "All contracts"
+                        else [r for r in by_team[abbr] if _contract_tier(r) == tier])
+                if not pool:
+                    continue
+                # Team views are inherently small: say so, so nobody reads a
+                # four-bar chart as a league ranking.
+                note = (f"This view is just the {len(pool)} tracked "
+                        f"{'player' if len(pool) == 1 else 'players'} on the {name} in this contract group — "
+                        "a roster slice, not a league leaderboard.")
+                surplus_total = sum(r["surplus_m"] for r in pool)
+                verdict = ("ahead" if surplus_total >= 0 else "behind")
+                title = (f'{name}, {tier.split(" (")[0].lower()}: about '
+                         f'${abs(surplus_total):.0f}M {verdict} of what this group produced')
+                g = build_group(pool, tier, note, title)
+                if g:
+                    groups[name + SEP + tier] = g
+                    added = True
+            if added:
+                team_options.append(name)
+
     all_ranked = sorted(rows, key=lambda r: r["surplus"], reverse=True)[:top_n]
     cheap_share = (sum(1 for r in all_ranked if r["salary"] < 1_000_000) / len(all_ranked) * 100
                    if all_ranked else 0)
@@ -282,19 +359,25 @@ def build_surplus_value_chart(rows, market_rate, top_n=15, bottom_n=10):
 
     return {
         "type": "diverging-bar", "tabLabel": "Paid vs. Produced",
+        "source": SOURCE_VALUE,
         "metricLabel": "The gap between what players earn and what they produce",
         "title": title,
         "blurb": (f"Multiply a player's WAR by what a win costs on the open market (about "
                   f"${market_rate_m:.0f}M), subtract what they're actually paid, and the difference is the "
                   "bar below — positive means the team got more than it paid for. "
                   "<strong>But a raw list of that gap mostly measures service time, not shrewdness</strong>, "
-                  "because MLB's pay structure forbids paying young players market value at all. So use the "
-                  "dropdown to compare players on similar contracts: that's the comparison where the number "
-                  "means what you'd assume it means."),
+                  "because MLB's pay structure forbids paying young players market value at all. Use the "
+                  "contract dropdown to compare players on similar deals, and the team dropdown to ask the "
+                  "same question of one roster."),
         "valueLabel": "Gap ($M)", "xAxisLabel": "Market value of production minus salary ($M)",
         "groups": groups,
-        "groupLabel": "Contract status",
-        "defaultGroup": "All contracts" if "All contracts" in groups else next(iter(groups), None),
+        "groupAxes": [
+            {"label": "Team", "options": team_options},
+            {"label": "Contract status", "options": list(CONTRACT_TIERS)},
+        ],
+        "defaultGroup": "All of MLB" + SEP + "All contracts",
+        "emptyGroupNote": ("No tracked players on this team fall in that contract group — try "
+                           "<em>All contracts</em>, or another team."),
         "footnote": (
             "Positive = produced more market value than salary paid; negative = the reverse. "
             f"Measured against the assumed open-market rate of ${market_rate_m:.0f}M per WAR — not "
@@ -334,6 +417,7 @@ def build_team_spend_chart(rows, team_payroll, team_names):
 
     return {
         "type": "scatter", "tabLabel": "Team Spending vs. Production",
+        "source": SOURCE_WAR_SALARY,
         "metricLabel": "Team payroll vs. production",
         "title": title,
         "blurb": ("Each dot is a team: total roster payroll across the bottom, the WAR this dashboard tracks "
@@ -375,6 +459,7 @@ def build_team_compare_chart(rows, team_names):
 
     return {
         "type": "team-compare", "tabLabel": "Compare Teammates",
+        "source": SOURCE_VALUE,
         "metricLabel": "Team Roster Comparison",
         "title": "Compare tracked teammates head-to-head",
         "blurb": f"Pick one of the {len(team_names)} tracked teams below to see who's producing, who's earning, and who's actually worth it.",
@@ -644,6 +729,7 @@ def build_price_of_win(rows, market_rate):
 
     return {
         "type": "histogram", "tabLabel": "The Price of a Win",
+        "source": SOURCE_WAR_SALARY,
         "metricLabel": "What a win actually costs",
         "title": (f"{below} of {len(priced)} players who produced a win at all "
                   f"({pct_below:.0f}%) delivered it for less than the "
@@ -838,6 +924,7 @@ def build_diminishing_returns(rows, team_names=None):
 
     return {
         "type": "diverging-bar", "tabLabel": "The Rising Cost of a Win",
+        "source": SOURCE_WAR_SALARY,
         "metricLabel": "What a win costs, bracket by bracket",
         "title": title,
         "blurb": ("Same question as the opening tab, asked of salary brackets instead of individuals. Every "
@@ -889,6 +976,7 @@ def build_payroll_efficiency(rows, team_payroll, team_names):
 
     return {
         "type": "diverging-bar", "tabLabel": "Payroll Efficiency",
+        "source": SOURCE_WAR_SALARY,
         "metricLabel": "Production returned per payroll dollar",
         "title": title,
         "blurb": (f"All {len(team_rows)} teams with both tracked players and a known payroll, ranked by how "
@@ -983,17 +1071,31 @@ def build_takeaways(charts, rows, team_payroll, team_names, market_rate, season)
         "heading": "Methods & sources",
         "items": [
             {"term": "WAR (Wins Above Replacement)",
-             "def": ("Baseball-Reference's bWAR for the "
-                     f"{season} season, scraped from their Player Value tables. One WAR is roughly one "
-                     "win more than a freely-available replacement-level player would have produced.")},
-            {"term": "Salary",
-             "def": ("Spotrac's per-team payroll pages. Some figures are average annual value (AAV) rather "
-                     "than the literal cash paid this season; those are marked “AAV” in tooltips.")},
+             "def": (f'{SOURCE_LINKS["bref"]}\'s bWAR for the {season} season, scraped from their '
+                     '<a href="https://www.baseball-reference.com/leagues/majors/'
+                     f'{season}-value-batting.shtml" rel="noopener">Player Value tables</a>. One WAR is '
+                     "roughly one win more than a freely-available replacement-level player would have "
+                     "produced. Baseball-Reference's data is their own work; this dashboard only "
+                     "recombines it.")},
+            {"term": "Salary and payroll",
+             "def": (f'{SOURCE_LINKS["spotrac"]}\'s per-team payroll pages. Some figures are average '
+                     "annual value (AAV) rather than the literal cash paid this season; those are marked "
+                     "“AAV” in tooltips.")},
+            {"term": "Team records",
+             "def": (f'{SOURCE_LINKS["bref"]}\'s standings page. Used for team context on the Awards Race '
+                     "tab and the Team Stories header. When unavailable, both fall back to a WAR-based "
+                     "measure of team strength and say so.")},
             {"term": f"Market rate (${market_rate_m:.0f}M per WAR)",
-             "def": ("A single blended figure for the current free-agent market, per FanGraphs' analysis of "
-                     "the 2025–26 offseason. It is an assumption, not a measurement: the real cost per "
-                     "win varies by position, contract length, and how badly a team needs one. Every "
-                     "“surplus value” figure on this dashboard inherits that assumption.")},
+             "def": (f'A single blended figure for the current free-agent market, per {SOURCE_LINKS["fangraphs"]}\' '
+                     "analysis of the 2025–26 offseason. It is an assumption, not a measurement: the real "
+                     "cost per win varies by position, contract length, and how badly a team needs one. "
+                     "Every “surplus value” figure on this dashboard inherits that assumption.")},
+            {"term": "Editorial models, labelled as such",
+             "def": ("Two views on this dashboard are models rather than measurements, and both show their "
+                     "formula on the page: the Awards Race “weighted by team record” lens (WAR × team "
+                     "winning % ÷ .500), and the contract tiers on Paid vs. Produced, which infer contract "
+                     "status from salary because no service-time data is available here. Everything else "
+                     "is arithmetic on the sources above.")},
             {"term": "Partial seasons",
              "def": ("WAR is season-to-date while salary figures are full-season. Mid-season, that "
                      "understates every player's production relative to their pay — the surplus numbers "
@@ -1005,9 +1107,11 @@ def build_takeaways(charts, rows, team_payroll, team_names, market_rate, season)
                      "three tracked players are left off those tabs entirely — with a thin sample, a team's "
                      "efficiency reflects how many of its players are followed here rather than anything "
                      "about the team.")},
-            {"term": "Everything is public data",
-             "def": ("Nothing here is proprietary — it's published stats and salary figures, recombined. "
-                     "The code that builds this page is on GitHub.")},
+            {"term": "Credit and independence",
+             "def": ("Nothing here is proprietary — it's published stats and salary figures, recombined, "
+                     "with the source named under every chart. This project is not affiliated with "
+                     "Baseball-Reference, Spotrac, FanGraphs or MLB. The code that builds this page is "
+                     '<a href="https://github.com/duransound/mlb-dashboard" rel="noopener">on GitHub</a>.')},
         ],
     })
 
@@ -1070,31 +1174,52 @@ AWARD_FIELDS = {
 }
 
 
+# The three ways this dashboard will let you look at an award race. Only
+# "Pure WAR" is a measurement; the other two are explicitly editorial, and
+# the page says so in the caption and footnote rather than burying it.
+AWARD_LENSES = [
+    "Pure WAR",
+    "Contenders only (teams over .500)",
+    "Weighted by team record",
+]
+
+
+def _ballot_score(war, rec):
+    """The disclosed weighting: WAR scaled by how far the player's team is
+    from .500. A .600 team multiplies by 1.2, a .400 team by 0.8, and a
+    perfectly average team changes nothing.
+
+    This is a MODEL, not a measurement -- there is no true exchange rate
+    between a win produced and a win the rest of the roster produced. It's
+    here because voters demonstrably behave this way, and showing the formula
+    lets a reader argue with it. Anything more elaborate would be false
+    precision dressed up as analysis."""
+    if not rec:
+        return war
+    return war * (rec["pct"] / 0.5)
+
+
 def build_awards_race(rows, standings=None, team_names=None, top_n=10):
     """rows: output of add_derived_fields(). standings: optional
-    {abbr: {"w","l","pct"}} from mlb_data.fetch_standings() -- absent on the
-    demo snapshot and whenever the scrape fails.
+    {abbr: {"w","l","pct"}} from mlb_data.fetch_standings().
 
-    Replaces the old MVP Tracker with one tab covering both awards, because
-    they are the same chart with different eligibility rules. Three controls:
-    award (MVP / Cy Young), league (AL / NL), and -- for MVP only -- field
-    (everyone / position players / pitchers).
+    Four pickers: award (MVP / Cy Young), league (AL / NL), field (for MVP
+    only: everyone / position players / pitchers), and team context (see
+    AWARD_LENSES).
 
     WHY THE FIELD FILTER EXISTS: WAR puts pitchers and hitters on one scale,
     so a raw WAR leaderboard regularly hands an "MVP race" to a starter. Real
-    ballots almost never do that. Rather than quietly excluding pitchers (a
-    hidden editorial choice) or pretending the raw list is the race (wrong),
-    the filter makes the choice the reader's and names it.
+    ballots almost never do. Rather than quietly excluding pitchers (a hidden
+    editorial choice) or pretending the raw list is the race (wrong), the
+    filter makes the choice the reader's and names it.
 
-    WHY TEAM RECORDS ARE SHOWN BUT NOT RANKED ON: voters demonstrably
-    discount players on bad teams, but there is no defensible weighting to
-    apply -- any "team-adjusted WAR" here would be invented. So the ranking
-    stays honest (pure WAR) and each candidate carries their team's record,
-    with the caption naming the tension when the WAR leader plays for a
-    losing team."""
-    # WAR-based fallback ranking for team strength, used when there are no
-    # standings. Sum of a roster's WAR is the closest thing this dataset has
-    # to a team quality measure.
+    WHY THE TEAM-CONTEXT LENS EXISTS: same reasoning, one level up. Voters
+    weigh team success heavily; WAR ignores it entirely. Both facts are true,
+    and the honest move is to let a reader switch between them and see how
+    much the ranking actually moves -- with the filter (a real subset) and
+    the weighting (an admitted model) kept clearly distinct. The lens picker
+    is hidden entirely when there are no standings, since every option but
+    the first would be undefined."""
     team_war = {}
     for r in rows:
         team_war[r["team"]] = team_war.get(r["team"], 0.0) + r["war"]
@@ -1108,65 +1233,119 @@ def build_awards_race(rows, standings=None, team_names=None, top_n=10):
             "name": r["name"], "team": r["team"], "war": round(r["war"], 1),
             "role": r["role"], "salary_m": round(r["salary_m"], 1),
             "record": _record_str(rec),
+            "pct": rec["pct"] if rec else None,
+            "adj": round(_ballot_score(r["war"], rec), 2),
             "winning": bool(rec and rec["pct"] > 0.5),
             "context": _team_context(r["team"], standings, war_rank.get(r["team"]), n_teams),
         }
 
-    awards = {}
-    captions = {}
+    lenses = AWARD_LENSES if standings else AWARD_LENSES[:1]
+
+    awards, captions = {}, {}
     for award, fields in AWARD_FIELDS.items():
-        awards[award] = {}
-        captions[award] = {}
+        awards[award], captions[award] = {}, {}
         for league in ("AL", "NL"):
             pool = [r for r in rows if TEAM_LEAGUE.get(r["team"]) == league]
-            awards[award][league] = {}
-            captions[award][league] = {}
+            awards[award][league], captions[award][league] = {}, {}
             for field_label, predicate in fields:
-                ranked = sorted([r for r in pool if predicate(r)],
-                                key=lambda r: r["war"], reverse=True)[:top_n]
-                awards[award][league][field_label] = [entry(r) for r in ranked]
-                captions[award][league][field_label] = _award_caption(
-                    award, league, field_label, ranked, standings, team_names)
+                eligible = [r for r in pool if predicate(r)]
+                awards[award][league][field_label] = {}
+                captions[award][league][field_label] = {}
+                for lens in lenses:
+                    if lens.startswith("Contenders"):
+                        subset = [r for r in eligible
+                                  if (standings or {}).get(r["team"], {}).get("pct", 0) > 0.5]
+                        ranked = sorted(subset, key=lambda r: r["war"], reverse=True)[:top_n]
+                    elif lens.startswith("Weighted"):
+                        ranked = sorted(
+                            eligible,
+                            key=lambda r: _ballot_score(r["war"], (standings or {}).get(r["team"])),
+                            reverse=True)[:top_n]
+                    else:
+                        ranked = sorted(eligible, key=lambda r: r["war"], reverse=True)[:top_n]
+                    awards[award][league][field_label][lens] = [entry(r) for r in ranked]
+                    captions[award][league][field_label][lens] = _award_caption(
+                        award, league, field_label, lens, ranked, eligible, standings, team_names)
 
     overall_best = max(rows, key=lambda r: r["war"]) if rows else None
     default_league = TEAM_LEAGUE.get(overall_best["team"], "AL") if overall_best else "AL"
 
     return {
         "type": "awards-race", "tabLabel": "Awards Race",
+        "source": SOURCE_AWARDS,
         "metricLabel": "MVP and Cy Young races, by WAR",
         "title": "Who's actually leading each award race — and who the ballot will probably reward instead",
         "blurb": ("There's no ballot data here, just WAR — sabermetrics' best single answer to \"who mattered "
                   "most.\" That makes this a cleaner race than the real one, and the gap between the two is "
-                  "the interesting part. <strong>Pick an award, a league, and (for MVP) which players count.</strong> "
-                  "WAR rates pitchers and hitters on one scale, so an unfiltered MVP list often hands the award "
-                  "to a starter; actual voters almost never do. Each candidate carries their team's record, "
-                  "because voters weigh that heavily even though WAR doesn't."),
-        "footnote": ("Ranked strictly by WAR — team record is shown, never scored, since any weighting of it "
-                     "here would be invented rather than measured. Two-way players appear on both the position-"
-                     "player and pitcher lists. See Methods & Sources."),
+                  "the interesting part. <strong>Pick an award, a league, which players count, and how much "
+                  "the team around them should matter.</strong> WAR rates pitchers and hitters on one scale, "
+                  "so an unfiltered MVP list often hands the award to a starter; actual voters almost never "
+                  "do, and they discount good players on bad teams besides."),
+        "footnote": ("<strong>Pure WAR</strong> is the measurement: team record is displayed but never scored. "
+                     "<strong>Contenders only</strong> is a filter — the same WAR ranking, restricted to "
+                     "players on teams above .500; nothing is invented, players are only removed. "
+                     "<strong>Weighted by team record</strong> is an explicit model: score = WAR × (team "
+                     "winning % ÷ .500), so a .600 team multiplies a player's WAR by 1.2 and a .400 team by "
+                     "0.8. That formula is a stand-in for how voters behave, not a measured exchange rate — "
+                     "argue with it freely. Two-way players appear on both the position-player and pitcher "
+                     "lists."),
         "awards": awards,
         "captions": captions,
         "fields": {award: [label for label, _p in fields] for award, fields in AWARD_FIELDS.items()},
+        "lenses": lenses,
         "defaultAward": "MVP",
         "defaultLeague": default_league,
+        "defaultLens": "Pure WAR",
         "hasStandings": bool(standings),
     }
 
 
-def _award_caption(award, league, field_label, ranked, standings, team_names):
+def _award_caption(award, league, field_label, lens, ranked, eligible, standings, team_names):
     """The story sentence under an awards leaderboard. Leads with the leader,
-    then the tension a reader should actually care about: whether the WAR
-    leader plays for a team the electorate will hold against them."""
-    if not ranked:
-        return "No qualifying players in this view."
-    lead = ranked[0]
+    then the tension a reader should actually care about -- which differs by
+    lens, so each lens explains what it just did to the list rather than
+    leaving the reader to infer it from a reshuffle."""
     names = team_names or {}
+    if not ranked:
+        if lens.startswith("Contenders"):
+            return ("No qualifying players on teams above .500 in this view — which is itself the finding: "
+                    "this league's best production is coming from teams that aren't winning.")
+        return "No qualifying players in this view."
+
+    lead = ranked[0]
     lead_team = names.get(lead["team"], lead["team"])
+    rec = (standings or {}).get(lead["team"])
+
+    if lens.startswith("Weighted"):
+        pure_lead = max(eligible, key=lambda r: r["war"])
+        parts = [f'<strong>{lead["name"]}</strong> leads the {league} {award} race once team record is '
+                 f'folded in — {lead["war"]:.1f} WAR for the {lead_team}'
+                 + (f', {rec["w"]}-{rec["l"]}.' if rec else '.')]
+        if pure_lead["name"] != lead["name"]:
+            parts.append(f'On WAR alone it would be {pure_lead["name"]} ({pure_lead["war"]:.1f}) — the '
+                         "weighting is doing real work here, which is exactly what it's for and exactly "
+                         "why it isn't the default.")
+        else:
+            parts.append("The weighting doesn't change who's on top, which is the strongest case a "
+                         "candidate can have: best by the measurement and best by the ballot's instincts.")
+        parts.append("Score = WAR × (team winning % ÷ .500). It's a model, not a measurement — see the note "
+                     "below.")
+        return " ".join(parts)
+
+    if lens.startswith("Contenders"):
+        removed = len(eligible) - len([r for r in eligible
+                                       if (standings or {}).get(r["team"], {}).get("pct", 0) > 0.5])
+        parts = [f'<strong>{lead["name"]}</strong> leads the {league} {award} race among players on winning '
+                 f'teams — {lead["war"]:.1f} WAR for the {lead_team}'
+                 + (f', {rec["w"]}-{rec["l"]}.' if rec else '.')]
+        parts.append(f'{removed} otherwise-eligible {"player" if removed == 1 else "players"} are hidden by '
+                     "this filter, all of them on teams under .500. Nothing here is reweighted — they're "
+                     "simply removed, the way a ballot tends to remove them.")
+        return " ".join(parts)
+
     parts = [f'<strong>{lead["name"]}</strong> leads the {league} {award} race on WAR '
              f'({lead["war"]:.1f}) for the {lead_team}.']
-
     if standings:
-        rec = standings.get(lead["team"])
         winners = sum(1 for r in ranked
                       if (standings.get(r["team"]) or {}).get("pct", 0) > 0.5)
         if rec and rec["pct"] <= 0.5:
@@ -1174,7 +1353,8 @@ def _award_caption(award, league, field_label, ranked, standings, team_names):
                          "no matter what the WAR column says.")
         elif rec:
             parts.append(f'The {rec["w"]}-{rec["l"]} record helps: voters reward production on teams that win.')
-        parts.append(f'{winners} of these {len(ranked)} candidates play for winning teams.')
+        parts.append(f'{winners} of these {len(ranked)} candidates play for winning teams — switch the team '
+                     "context dropdown to see how much that would move the race.")
     else:
         parts.append("Team records aren't in this build, so there's no way to weigh the team-success factor "
                      "voters lean on — run the full-league build to pull them in.")
@@ -1360,6 +1540,7 @@ def build_team_stories(rows, team_names, standings=None, market_rate=None):
 
     return {
         "type": "team-story", "tabLabel": "Team Stories",
+        "source": SOURCE_VALUE,
         "metricLabel": "Roster by roster, player by player",
         "title": "Where each team's wins are actually coming from",
         "blurb": ("Pick a team and read it. Every tracked player on the roster, ordered by how many wins "
