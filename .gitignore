@@ -6,3 +6,4 @@ history/
 weekly_update.log
 .poppies_theme.lock
 _to_delete/
+.DS_Store

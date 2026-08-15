@@ -9,8 +9,26 @@ cd "$(dirname "$0")"
 SEASON="${1:-2026}"
 DATE_TAG="$(date +%Y-%m-%d)"
 
-echo "[$(date)] Running build_dashboard.py --season $SEASON"
-python3 build_dashboard.py --season "$SEASON"
+# Prefer this project's own virtualenv. cron runs with a minimal PATH and no
+# shell profile, so a bare `python3` there resolves to the SYSTEM Python --
+# which does not have pandas/requests/lxml and fails with ModuleNotFoundError
+# the first time this runs unattended. Falling back to python3 only if the
+# venv is missing keeps the script working for anyone who skipped it.
+if [ -x ".venv/bin/python" ]; then
+  PYTHON=".venv/bin/python"
+else
+  PYTHON="$(command -v python3 || true)"
+  if [ -z "$PYTHON" ]; then
+    echo "[$(date)] ERROR: no python3 found and no .venv in $(pwd)." >&2
+    echo "  Create one with: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt" >&2
+    exit 1
+  fi
+  echo "[$(date)] WARNING: no .venv found, using $PYTHON -- if this fails with"
+  echo "  ModuleNotFoundError, see the README's 'Run it yourself' section."
+fi
+
+echo "[$(date)] Running build_dashboard.py --season $SEASON with $PYTHON"
+"$PYTHON" build_dashboard.py --season "$SEASON"
 
 mkdir -p history
 cp dashboard.html "history/dashboard_${DATE_TAG}.html"

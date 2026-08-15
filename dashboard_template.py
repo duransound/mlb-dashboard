@@ -126,6 +126,43 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   .tooltip .name {{ font-weight: 600; margin-bottom: 2px; }}
   .tooltip .row {{ color: #d8d8d4; }}
   .footnote {{ font-size: 11px; color: var(--text-muted); margin-top: 14px; }}
+  /* Team Stories roster -- see drawTeamStory. */
+  .team-meta {{ font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); margin: 14px 0 8px; }}
+  .roster {{ margin-top: 6px; border-top: 1px solid var(--grid); }}
+  .roster-row {{ padding: 11px 0; border-bottom: 1px solid var(--grid); }}
+  .roster-head {{ display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }}
+  .roster-name {{ font-family: var(--font-head); font-size: 14.5px; font-weight: 600; color: var(--text-primary); }}
+  .roster-stats {{ font-size: 11.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }}
+  .roster-row.compact {{ padding: 6px 0; }}
+  .roster-row.compact .roster-name {{ font-family: var(--font-body); font-size: 12.5px; font-weight: 500; }}
+  .roster-rest-head {{ font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); margin: 20px 0 2px; }}
+  .roster-story {{ font-size: 12.5px; line-height: 1.5; color: var(--text-secondary); margin: 3px 0 0; max-width: 660px; }}
+  /* Drill-down roster under a grouped chart -- see renderMembers. */
+  .members {{ margin-top: 18px; }}
+  .members-caption {{ font-size: 12.5px; color: var(--text-primary); margin: 0 0 8px; max-width: 660px; }}
+  .members-caption strong {{ font-weight: 700; }}
+  .members-scroll {{ max-height: 320px; overflow-y: auto; border: 1px solid var(--grid); border-radius: 8px; }}
+  .members-table {{ width: 100%; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; }}
+  .members-table th, .members-table td {{ padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--grid); white-space: nowrap; }}
+  .members-table th {{
+    position: sticky; top: 0; background: var(--surface-2); color: var(--text-secondary);
+    font-weight: 700; font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; z-index: 1;
+  }}
+  .members-table td.num, .members-table th.num {{ text-align: right; }}
+  .members-table tbody tr:hover {{ background: var(--surface-2); }}
+  .members-more {{ font-size: 11px; color: var(--text-muted); margin: 8px 0 0; }}
+  /* Text-only panels (What This Means, Methods & Sources) -- see drawProse. */
+  .prose-para {{ font-size: 13.5px; line-height: 1.6; color: var(--text-primary); margin: 0 0 12px; max-width: 680px; }}
+  .prose-para.lede {{ font-size: 15px; font-weight: 500; }}
+  .prose-para em {{ color: var(--series-1-dark); font-style: normal; font-weight: 700; }}
+  .methods-heading {{
+    font-family: var(--font-head); font-size: 15px; font-weight: 600; color: var(--text-primary);
+    margin: 22px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--grid);
+  }}
+  .methods-heading:first-child {{ margin-top: 0; }}
+  .methods-list {{ margin: 0 0 8px; font-size: 12.5px; line-height: 1.55; }}
+  .methods-list dt {{ font-weight: 700; color: var(--text-primary); margin-top: 10px; }}
+  .methods-list dd {{ margin: 2px 0 0; color: var(--text-secondary); max-width: 720px; }}
   .legend {{ display: flex; gap: 16px; font-size: 11.5px; color: var(--text-secondary); margin-bottom: 10px; }}
   .legend-item {{ display: flex; align-items: center; gap: 6px; }}
   .legend-swatch {{ width: 10px; height: 10px; border-radius: 50%; display: inline-block; }}
@@ -239,6 +276,59 @@ function moveTooltip(event) {{
 function hideTooltip() {{ tooltip.style.opacity = 0; }}
 
 function drawDivergingBar(container, cfg) {{
+  // cfg.groups: a labelled set of alternative datasets with a picker above
+  // the chart (Paid vs. Produced splits by contract status). Each group
+  // carries its own caption, because the reason a group exists is usually
+  // the thing the reader most needs told. Implemented as a thin wrapper that
+  // re-enters this same function with the chosen group's data, so every
+  // other behaviour -- sorting, click-to-highlight, member rosters -- is
+  // inherited rather than reimplemented.
+  if (cfg.groups) {{
+    const labels = Object.keys(cfg.groups);
+    const pickerRow = document.createElement("div");
+    pickerRow.className = "picker-row";
+    const group = document.createElement("div");
+    group.className = "picker-group";
+    const lab = document.createElement("div");
+    lab.className = "picker-label";
+    lab.textContent = cfg.groupLabel || "View";
+    const sel = document.createElement("select");
+    labels.forEach(l => {{
+      const opt = el2("option", {{value: l}});
+      opt.textContent = l;
+      sel.appendChild(opt);
+    }});
+    sel.value = cfg.defaultGroup && labels.includes(cfg.defaultGroup) ? cfg.defaultGroup : labels[0];
+    group.appendChild(lab); group.appendChild(sel); pickerRow.appendChild(group);
+    container.appendChild(pickerRow);
+
+    const caption = document.createElement("p");
+    caption.className = "compare-caption team-blurb";
+    container.appendChild(caption);
+
+    const mount = document.createElement("div");
+    container.appendChild(mount);
+
+    // A group may override the panel headline. Without this a reader who
+    // picks a team still sees the league-wide finding in the <h2> above the
+    // chart, which reads as a claim about the team they just selected.
+    const panel = container.closest(".panel");
+    const h2 = panel ? panel.querySelector("h2") : null;
+    const baseTitle = h2 ? h2.textContent : null;
+
+    const renderGroup = () => {{
+      const g = cfg.groups[sel.value];
+      if (h2) h2.textContent = g.title || baseTitle;
+      caption.innerHTML = g.caption || "";
+      mount.innerHTML = "";
+      drawDivergingBar(mount, {{...cfg, groups: null, members: g.members || cfg.members,
+                               data: g.data.map(d => ({{...d}}))}});
+    }};
+    sel.addEventListener("change", renderGroup);
+    renderGroup();
+    return;
+  }}
+
   // Stable per-point id so a click can be traced back to the same bar
   // across re-renders, independent of the value-sort order below.
   cfg.data.forEach((d, i) => {{ if (d.__cid === undefined) d.__cid = i; }});
@@ -255,13 +345,20 @@ function drawDivergingBar(container, cfg) {{
     const effective = activeCid === null ? cfg.data
       : cfg.data.map(d => ({{...d, highlight: d.__cid === activeCid}}));
     // Descending -- row 0 (top of the chart) is the highest value. Every
-    // caller of this chart (Surplus Value, MVP Tracker, Compare Teammates)
+    // caller of this chart (Paid vs. Produced, Awards Race, Compare
+    // Teammates)
     // treats "first row" as "top-ranked," so the chart itself needs to
     // render that way rather than each caller working around an ascending
     // sort with y-axis flips or reversed data.
-    const data = [...effective].sort((a, b) => b.value - a.value);
+    // preserveOrder: for data whose row order is itself meaningful (salary
+    // brackets running cheap -> expensive on The Rising Cost of a Win),
+    // where
+    // re-sorting by value would destroy the very sequence the chart is
+    // about. Everything else sorts descending so row 0 is top-ranked.
+    const data = cfg.preserveOrder ? [...effective]
+      : [...effective].sort((a, b) => b.value - a.value);
     const longestLabel = Math.max(...data.map(d => d.label.length));
-    const margin = {{top: 8, right: 30, bottom: 34, left: Math.max(90, longestLabel * 6.5 + 12)}};
+    const margin = {{top: 8, right: 30, bottom: 48, left: Math.max(90, longestLabel * 6.5 + 12)}};
     const width = 820 - margin.left - margin.right;
     const rowH = 26;
     const height = data.length * rowH;
@@ -331,6 +428,13 @@ function drawDivergingBar(container, cfg) {{
     xLabel.textContent = cfg.xAxisLabel || "";
     g.appendChild(xLabel);
 
+    // Charts whose bars are groups rather than individuals (Diminishing
+    // Returns) carry a per-bar roster; show whichever bar is highlighted.
+    if (cfg.members) {{
+      const shown = data.find(d => d.highlight) || data[0];
+      if (shown) renderMembers(container, cfg.members[shown.label]);
+    }}
+
     // Clicking anywhere on the chart that isn't a bar (empty axis/gridline
     // area) reverts to the curated default highlight.
     svg.addEventListener("click", (event) => {{
@@ -363,6 +467,171 @@ function resolveCollisions(points, r, padding) {{
     if (!moved) break;
   }}
   return points;
+}}
+
+
+// Shared "who is actually in this group" table, used by the two tabs whose
+// bars are counts/aggregates rather than people (The Price of a Win,
+// The Rising Cost of a Win). Both were reported as confusing precisely because
+// a bar labelled "18 players" doesn't tell you WHICH 18 -- the abstraction
+// is the whole problem, and naming the players dissolves it.
+function renderMembers(container, group) {{
+  if (!group) return;
+  const wrap = document.createElement("div");
+  wrap.className = "members";
+
+  const cap = document.createElement("p");
+  cap.className = "members-caption";
+  cap.innerHTML = group.caption || "";
+  wrap.appendChild(cap);
+
+  if (group.rows && group.rows.length) {{
+    const scroll = document.createElement("div");
+    scroll.className = "members-scroll";
+    const table = document.createElement("table");
+    table.className = "members-table";
+    table.innerHTML = `<thead><tr>
+      <th>Player</th><th>Team</th><th class="num">WAR</th>
+      <th class="num">Salary</th><th class="num">Cost per win</th></tr></thead>`;
+    const tbody = document.createElement("tbody");
+    group.rows.forEach(r => {{
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${{r.name}}</td><td>${{r.team}}</td>` +
+        `<td class="num">${{r.war}}</td><td class="num">${{r.salary}}</td>` +
+        `<td class="num">${{r.price}}</td>`;
+      tbody.appendChild(tr);
+    }});
+    table.appendChild(tbody);
+    scroll.appendChild(table);
+    wrap.appendChild(scroll);
+  }}
+
+  if (group.more) {{
+    const more = document.createElement("p");
+    more.className = "members-more";
+    more.textContent = group.more;
+    wrap.appendChild(more);
+  }}
+  container.appendChild(wrap);
+}}
+
+// Vertical histogram for a distribution (The Price of a Win: how many
+// players fall in each $/WAR band). Bins are computed Python-side so the
+// bin edges, counts and the "which bin holds the assumed market rate"
+// decision all come from the same pass that writes the headline -- JS only
+// draws what it's handed.
+function drawHistogram(container, cfg) {{
+  let selected = cfg.bins.findIndex(b => b.highlight);
+  if (selected < 0) selected = 0;
+
+  function renderOnce() {{
+  container.innerHTML = "";
+  const data = cfg.bins.map((b, i) => ({{...b, highlight: i === selected}}));
+  const margin = {{top: 14, right: 24, bottom: 64, left: 56}};
+  const width = 820 - margin.left - margin.right;
+  const height = 300;
+  const svg = el("svg", {{width: width + margin.left + margin.right, height: height + margin.top + margin.bottom}});
+  const g = el("g", {{transform: `translate(${{margin.left}},${{margin.top}})`}});
+  svg.appendChild(g);
+  container.appendChild(svg);
+
+  const maxCount = Math.max(...data.map(d => d.count)) || 1;
+  const y = v => height - (v / (maxCount * 1.1)) * height;
+  const bandW = width / data.length;
+
+  ticksFor(0, maxCount * 1.1, 5).forEach(t => {{
+    g.appendChild(el("line", {{class: "gridline", x1: 0, x2: width, y1: y(t), y2: y(t)}}));
+    const lab = el("text", {{class: "axis-label", x: -10, y: y(t) + 4, "text-anchor": "end"}});
+    lab.textContent = t;
+    g.appendChild(lab);
+  }});
+
+  data.forEach((d, i) => {{
+    const bx = i * bandW;
+    const bh = height - y(d.count);
+    const rect = el("rect", {{
+      class: "bar" + (d.highlight ? "" : " muted"),
+      x: bx + 3, y: y(d.count), width: Math.max(bandW - 6, 1), height: Math.max(bh, 0), rx: 3,
+    }});
+    rect.addEventListener("mouseenter", (event) => showTooltip(
+      `<div class="name">${{d.label}}</div><div class="row">${{d.count}} ${{cfg.unitLabel || "players"}}</div>${{d.extra ? `<div class="row">${{d.extra}}</div>` : ""}}`, event));
+    rect.addEventListener("mousemove", moveTooltip);
+    rect.addEventListener("mouseleave", hideTooltip);
+    if (d.count > 0) {{
+      rect.style.cursor = "pointer";
+      rect.addEventListener("click", () => {{ selected = i; hideTooltip(); renderOnce(); }});
+    }}
+    g.appendChild(rect);
+
+    // Every other tick when the labels would collide.
+    if (data.length <= 12 || i % 2 === 0) {{
+      const lab = el("text", {{class: "axis-label", x: bx + bandW / 2, y: height + 18, "text-anchor": "middle"}});
+      lab.textContent = d.label;
+      g.appendChild(lab);
+    }}
+    if (d.highlight && d.annotation) {{
+      const anno = el("text", {{class: "annotation", x: bx + bandW / 2, y: y(d.count) - 8, "text-anchor": "middle"}});
+      anno.textContent = d.annotation;
+      g.appendChild(anno);
+    }}
+  }});
+
+  // Reference line for the assumed market rate -- solid, like the
+  // replacement-level line on the scatter, because it's a fixed stated
+  // assumption rather than a statistic of this sample.
+  if (cfg.refIndex !== undefined && cfg.refIndex !== null) {{
+    const rx = (cfg.refIndex + 1) * bandW;
+    g.appendChild(el("line", {{x1: rx, x2: rx, y1: -6, y2: height, stroke: "var(--text-muted)", "stroke-width": 1.5}}));
+    const lab = el("text", {{class: "annotation", x: rx + 6, y: 4, "text-anchor": "start"}});
+    lab.textContent = cfg.refLabel || "";
+    g.appendChild(lab);
+  }}
+
+  const xLabel = el("text", {{class: "axis-label", x: width / 2, y: height + 46, "text-anchor": "middle"}});
+  xLabel.textContent = cfg.xAxisLabel || "";
+  g.appendChild(xLabel);
+  const yLabel = el("text", {{class: "axis-label", transform: `rotate(-90) translate(${{-height / 2}},-40)`, "text-anchor": "middle"}});
+  yLabel.textContent = cfg.yAxisLabel || "";
+  g.appendChild(yLabel);
+
+  renderMembers(container, (cfg.members || {{}})[cfg.bins[selected].label]);
+  }}
+  renderOnce();
+}}
+
+// Text-only panel (What This Means / Methods & Sources). Not a chart, but
+// it lives in the same CHARTS array so the closing takeaway and the
+// methodology are tabs like everything else rather than loose HTML the
+// builder has to special-case.
+function drawProse(container, cfg) {{
+  container.innerHTML = "";
+  (cfg.sections || []).forEach(sec => {{
+    if (sec.heading) {{
+      const h = document.createElement("p");
+      h.className = "methods-heading";
+      h.textContent = sec.heading;
+      container.appendChild(h);
+    }}
+    (sec.paragraphs || []).forEach(p => {{
+      const el2 = document.createElement("p");
+      el2.className = "prose-para";
+      el2.innerHTML = p;
+      container.appendChild(el2);
+    }});
+    if (sec.items && sec.items.length) {{
+      const dl = document.createElement("dl");
+      dl.className = "methods-list";
+      sec.items.forEach(it => {{
+        const dt = document.createElement("dt");
+        dt.innerHTML = it.term;
+        const dd = document.createElement("dd");
+        dd.innerHTML = it.def;
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+      }});
+      container.appendChild(dl);
+    }}
+  }});
 }}
 
 function drawScatter(container, cfg) {{
@@ -494,14 +763,29 @@ function drawScatter(container, cfg) {{
     // range -- log(0) and negative values have no position on this scale.
     const xLog = cfg.xScaleType === "log";
     let xScale, xTicks;
+    // Pad the low end of the domain by roughly one bubble-radius worth of
+    // width. Without this the cheapest player maps to exactly x=0, i.e. the
+    // y-axis, and half their bubble (plus its team badge) is drawn outside
+    // the plot area and clipped by the SVG edge -- which is what a
+    // league-minimum player always is on a log salary axis, so the bug hit
+    // the left column of dots every single render. The high end already has
+    // xMax * 1.15 of headroom for the same reason.
+    const bubbleR = (cfg.radius || 13) + 4;
+    const padFrac = Math.min(0.18, bubbleR / width);
     if (xLog) {{
       const xMinData = Math.max(0.01, Math.min(...data.map(d => d.x)));
-      const logMin = Math.log10(xMinData), logMax = Math.log10(xMax);
-      xScale = v => ((Math.log10(Math.max(v, xMinData)) - logMin) / (logMax - logMin)) * width;
+      const rawLogMin = Math.log10(xMinData), logMax = Math.log10(xMax);
+      const logMin = rawLogMin - (logMax - rawLogMin) * padFrac;
+      const xFloor = Math.pow(10, logMin);
+      xScale = v => ((Math.log10(Math.max(v, xFloor)) - logMin) / (logMax - logMin)) * width;
       xTicks = logTicksFor(xMinData, xMax);
     }} else {{
-      xScale = v => (v / xMax) * width;
-      xTicks = ticksFor(0, xMax, 8);
+      // Linear charts (Team Spending) have the same edge problem whenever
+      // the smallest value isn't near zero.
+      const xMinData = Math.min(...data.map(d => d.x));
+      const xFloor = Math.max(0, xMinData - (xMax - xMinData) * padFrac);
+      xScale = v => ((v - xFloor) / (xMax - xFloor || 1)) * width;
+      xTicks = ticksFor(xFloor, xMax, 8);
     }}
     // invertY: plot higher values lower on screen (useful when "lower is better",
     // e.g. xG Against, so "up" reads as "good" on both axes at once)
@@ -816,6 +1100,157 @@ function drawMvpTracker(container, cfg) {{
   render();
 }}
 
+
+// MVP + Cy Young in one tab. Three pickers: award, league, and -- for MVP
+// only -- which players are eligible. The field picker is hidden for Cy
+// Young, which is a pitching award by definition and has nothing to filter.
+function drawAwardsRace(container, cfg) {{
+  const pickerRow = document.createElement("div");
+  pickerRow.className = "picker-row";
+
+  function picker(labelText, options) {{
+    const group = document.createElement("div");
+    group.className = "picker-group";
+    const lab = document.createElement("div");
+    lab.className = "picker-label";
+    lab.textContent = labelText;
+    const sel = document.createElement("select");
+    options.forEach(([value, text]) => {{
+      const opt = el2("option", {{value}});
+      opt.textContent = text;
+      sel.appendChild(opt);
+    }});
+    group.appendChild(lab); group.appendChild(sel);
+    pickerRow.appendChild(group);
+    return {{group, sel}};
+  }}
+
+  const awardNames = Object.keys(cfg.awards);
+  const award = picker("Award", awardNames.map(a => [a, a]));
+  const league = picker("League", [["AL", "American League"], ["NL", "National League"]]);
+  const field = picker("Who counts", []);
+  award.sel.value = cfg.defaultAward || awardNames[0];
+  league.sel.value = cfg.defaultLeague || "AL";
+  container.appendChild(pickerRow);
+
+  const caption = document.createElement("p");
+  caption.className = "compare-caption team-blurb";
+  container.appendChild(caption);
+
+  const chartMount = document.createElement("div");
+  container.appendChild(chartMount);
+
+  function syncFields() {{
+    const opts = (cfg.fields || {{}})[award.sel.value] || ["Everyone"];
+    const previous = field.sel.value;
+    field.sel.innerHTML = "";
+    opts.forEach(o => {{
+      const opt = el2("option", {{value: o}});
+      opt.textContent = o;
+      field.sel.appendChild(opt);
+    }});
+    field.sel.value = opts.includes(previous) ? previous : opts[0];
+    // Nothing to choose between when an award has a single eligible field.
+    field.group.style.display = opts.length > 1 ? "" : "none";
+  }}
+
+  function render() {{
+    syncFields();
+    chartMount.innerHTML = "";
+    const players = (((cfg.awards[award.sel.value] || {{}})[league.sel.value]) || {{}})[field.sel.value] || [];
+    const cap = (((cfg.captions[award.sel.value] || {{}})[league.sel.value]) || {{}})[field.sel.value] || "";
+    caption.innerHTML = cap;
+    if (!players.length) {{ return; }}
+    const leader = players[0];
+    drawDivergingBar(chartMount, {{
+      oneSided: true, valueLabel: "WAR", xAxisLabel: "WAR",
+      data: players.map(p => ({{
+        // Team record rides in the visible label, not just the tooltip:
+        // voters weigh team success heavily, so a reader scanning the
+        // leaderboard should see it without hovering every bar.
+        label: p.record ? `${{p.name}} (${{p.team}} ${{p.record}})` : `${{p.name}} (${{p.team}})`,
+        value: p.war,
+        highlight: p === leader,
+        extra: [p.role,
+                p.record ? `Team ${{p.record}}` : (p.context || ""),
+                `Salary $${{p.salary_m.toFixed(1)}}M`].filter(Boolean).join(" &middot; "),
+      }})),
+    }});
+  }}
+
+  [award.sel, league.sel, field.sel].forEach(sel => sel.addEventListener("change", render));
+  render();
+}}
+
+// Roster-by-roster narrative. Not a chart: the unit here is a sentence.
+function drawTeamStory(container, cfg) {{
+  const pickerRow = document.createElement("div");
+  pickerRow.className = "picker-row";
+  const group = document.createElement("div");
+  group.className = "picker-group";
+  const lab = document.createElement("div");
+  lab.className = "picker-label";
+  lab.textContent = "Team";
+  const sel = document.createElement("select");
+  Object.keys(cfg.teams)
+    .sort((a, b) => cfg.teams[a].name.localeCompare(cfg.teams[b].name))
+    .forEach(abbr => {{
+      const opt = el2("option", {{value: abbr}});
+      opt.textContent = cfg.teams[abbr].name;
+      sel.appendChild(opt);
+    }});
+  sel.value = cfg.defaultTeam || sel.options[0].value;
+  group.appendChild(lab); group.appendChild(sel); pickerRow.appendChild(group);
+  container.appendChild(pickerRow);
+
+  const body = document.createElement("div");
+  container.appendChild(body);
+
+  function render() {{
+    const t = cfg.teams[sel.value];
+    body.innerHTML = "";
+    if (!t) return;
+
+    const meta = document.createElement("p");
+    meta.className = "team-meta";
+    meta.textContent = t.meta;
+    body.appendChild(meta);
+
+    const summary = document.createElement("p");
+    summary.className = "prose-para lede";
+    summary.innerHTML = t.summary;
+    body.appendChild(summary);
+
+    const list = document.createElement("div");
+    list.className = "roster";
+    let restHeaderAdded = false;
+    t.players.forEach(p => {{
+      // Narrated players first, then a labelled break and the remainder as
+      // compact rows -- see NARRATED_PLAYERS in chart_builders.py.
+      if (!p.story && !restHeaderAdded) {{
+        restHeaderAdded = true;
+        const h = document.createElement("p");
+        h.className = "roster-rest-head";
+        h.textContent = "The rest of the tracked roster";
+        list.appendChild(h);
+      }}
+      const row = document.createElement("div");
+      row.className = p.story ? "roster-row" : "roster-row compact";
+      row.innerHTML =
+        `<div class="roster-head">` +
+          `<span class="roster-name">${{p.name}}</span>` +
+          `<span class="roster-stats">${{p.role}} &middot; ${{p.war}} WAR &middot; ${{p.share}} of team &middot; ${{p.salary}}</span>` +
+        `</div>` +
+        (p.story ? `<p class="roster-story">${{p.story}}</p>` : "");
+      list.appendChild(row);
+    }});
+    body.appendChild(list);
+  }}
+
+  sel.addEventListener("change", render);
+  render();
+}}
+
 function drawLine(container, cfg) {{
   // Single-series line chart -- e.g. a league-wide total plotted one point
   // per season. One highlighted point (per the highlight/mute convention
@@ -1028,6 +1463,10 @@ CHARTS.forEach((chart, i) => {{
   if (chart.type === "line") drawLine(mount, chart);
   if (chart.type === "season-compare") drawSeasonCompare(mount, chart);
   if (chart.type === "shot-map") drawShotMap(mount, chart);
+  if (chart.type === "histogram") drawHistogram(mount, chart);
+  if (chart.type === "prose") drawProse(mount, chart);
+  if (chart.type === "awards-race") drawAwardsRace(mount, chart);
+  if (chart.type === "team-story") drawTeamStory(mount, chart);
 }});
 </script>
 </body>

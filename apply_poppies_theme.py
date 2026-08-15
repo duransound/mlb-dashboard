@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Apply the "Poppies in the Fog" theme (the NWSL dashboard's Round 20 palette)
-to the Diamond Dollars kit.
+to the MLB value-vs-cost dashboard kit.
 
 WHY THIS EXISTS
 ---------------

@@ -1,5 +1,5 @@
 """
-Builds the full-league "Diamond Dollars" dashboard (dashboard.html) from
+Builds the full-league MLB value-vs-cost dashboard (dashboard.html) from
 LIVE data: WAR scraped directly from Baseball-Reference and salary scraped
 directly from Spotrac's per-team payroll pages (both in mlb_data.py) --
 all 30 teams, every qualifying player, not the ~47-player curated snapshot
@@ -27,12 +27,15 @@ import argparse
 import difflib
 
 from chart_builders import (
-    add_derived_fields, build_mvp_tracker, build_story_lede,
-    build_surplus_value_chart, build_team_compare_chart,
-    build_team_spend_chart, build_value_scatter,
+    add_derived_fields, build_awards_race, build_diminishing_returns,
+    build_payroll_efficiency, build_price_of_win, build_story_lede,
+    build_surplus_value_chart, build_takeaways, build_team_compare_chart,
+    build_team_spend_chart, build_team_stories, build_value_scatter,
 )
 from dashboard_template import render_dashboard
-from mlb_data import TEAM_NAMES, fetch_all_payrolls, fetch_war_leaderboards
+from mlb_data import (
+    TEAM_NAMES, fetch_all_payrolls, fetch_standings, fetch_war_leaderboards,
+)
 
 MARKET_RATE_PER_WAR = 11_000_000  # see mlb_snapshot_data.py's docstring for the source
 
@@ -126,19 +129,37 @@ def main():
     if args.min_war is not None:
         print(f"League Picture scatter: {len(scatter_rows)} of {len(rows)} players have WAR >= {args.min_war}")
 
-    chart_value = build_value_scatter(scatter_rows, TEAM_NAMES)
-    chart_mvp = build_mvp_tracker(rows)
-    chart_surplus = build_surplus_value_chart(rows, MARKET_RATE_PER_WAR, top_n=20, bottom_n=20)
-    chart_team_spend = build_team_spend_chart(rows, team_payroll, TEAM_NAMES)
-    chart_compare = build_team_compare_chart(rows, TEAM_NAMES)
-    charts = [chart_value, chart_mvp, chart_surplus, chart_team_spend, chart_compare]
+    # Team records power the Awards Race tab's team-context column and the
+    # Team Stories header. Entirely optional: fetch_standings never raises and
+    # returns {} on any failure, and every chart below renders without it.
+    print("\nFetching standings...")
+    standings = fetch_standings(args.season)
+
+    # Tab order is the argument's order: price the unit -> show who beats
+    # that price -> name them -> ask whether paying more works at all ->
+    # zoom out to teams -> let the reader explore -> close with the point.
+    # Note every tab except the League Picture scatter gets the full `rows`
+    # (see the --min-war comment above).
+    charts = [
+        build_price_of_win(rows, MARKET_RATE_PER_WAR),
+        build_value_scatter(scatter_rows, TEAM_NAMES),
+        build_surplus_value_chart(rows, MARKET_RATE_PER_WAR, top_n=20, bottom_n=20),
+        build_diminishing_returns(rows, TEAM_NAMES),
+        build_awards_race(rows, standings, TEAM_NAMES),
+        build_payroll_efficiency(rows, team_payroll, TEAM_NAMES),
+        build_team_spend_chart(rows, team_payroll, TEAM_NAMES),
+        build_team_stories(rows, TEAM_NAMES, standings, MARKET_RATE_PER_WAR),
+        build_team_compare_chart(rows, TEAM_NAMES),
+    ]
+    charts.append(build_takeaways(charts, rows, team_payroll, TEAM_NAMES,
+                                  MARKET_RATE_PER_WAR, args.season))
 
     html = render_dashboard(
-        title="Diamond Dollars — MLB Value vs. Cost",
-        subtitle=(f"Comparing what MLB players produce (WAR) against what they're paid, {args.season} season — "
-                   f"{len(rows)} players across {len(team_payroll)} teams."),
+        title="MLB Value vs. Cost",
+        subtitle=(f"What baseball's wins actually cost, and who is buying them cheapest — {len(rows)} players "
+                   f"across {len(team_payroll)} teams, {args.season} season."),
         charts=charts,
-        story=build_story_lede(charts),
+        story=build_story_lede(charts, rows, team_payroll, TEAM_NAMES, MARKET_RATE_PER_WAR),
         story_kicker=f"{args.season} season, full league",
     )
     with open("dashboard.html", "w") as f:

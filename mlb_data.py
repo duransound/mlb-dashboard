@@ -1,5 +1,5 @@
 """
-Live data-fetching helpers for the "Diamond Dollars" dashboard -- run on YOUR
+Live data-fetching helpers for the MLB value-vs-cost dashboard -- run on YOUR
 machine (unrestricted network), not in the cloud sandbox that built this kit.
 
 **History (see README for the full story):** this file originally pulled WAR
@@ -315,4 +315,110 @@ def fetch_all_payrolls(team_abbrs=None):
               "blocking requests too. Open one team's URL in a browser (printed in the FAILED "
               "lines above) and compare its table structure against this file's "
               "fetch_team_payroll docstring.")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Standings
+#
+# Added so the awards tabs can show team context: real MVP voting weighs team
+# success heavily, and until now this dashboard had no outcome variable at
+# all -- only WAR and salary.
+#
+# WRITTEN BUT NOT EXECUTED against the live site. The sandbox this was built
+# in cannot reach baseball-reference.com, so unlike the WAR and Spotrac
+# fetchers (both confirmed against live pages) this one is unverified. It is
+# therefore deliberately TOTALLY OPTIONAL: every failure path returns {}, the
+# caller treats {} as "no standings," and every downstream chart already
+# renders without them. A broken standings scrape must never take the whole
+# build down -- the dashboard's core argument doesn't depend on it.
+# ---------------------------------------------------------------------------
+
+# Column namings Baseball-Reference has used for wins/losses across its
+# standings-style tables. Checked in order.
+STANDINGS_COL_CANDIDATES = [("W", "L"), ("Wins", "Losses")]
+
+# The standings tables identify teams by full name or by abbreviation
+# depending on which table on the page you land on; both are accepted.
+_FULL_NAME_TO_ABBR = {name: abbr for abbr, name in TEAM_NAMES.items()}
+
+
+def _standings_team_to_abbr(raw):
+    """Maps whatever the standings table calls a team to this project's
+    abbreviation. Handles full names ("Los Angeles Dodgers"), plain
+    abbreviations, and BR's habit of suffixing clinched teams with a marker
+    ("Los Angeles Dodgers*", "Milwaukee Brewers (1)")."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    text = re.sub(r"\s*\(\d+\)$", "", text)          # trailing seed marker
+    text = text.rstrip("*xyzXYZ# ").strip()            # clinch markers
+    if text in _FULL_NAME_TO_ABBR:
+        return _FULL_NAME_TO_ABBR[text]
+    if text in TEAM_NAMES:
+        return text
+    # Last resort: match on the team's nickname (final word(s)) so a
+    # relocation or a "Athletics"-style branding change doesn't silently
+    # drop a team.
+    for full, abbr in _FULL_NAME_TO_ABBR.items():
+        if text and (full.endswith(text) or text.endswith(full.split()[-1])):
+            return abbr
+    return None
+
+
+def fetch_standings(season):
+    """Returns {abbr: {"w": int, "l": int, "pct": float}} for every team it
+    can parse, or {} if anything at all goes wrong.
+
+    Never raises. Callers should treat {} as "team records unavailable" and
+    fall back to WAR-based team context."""
+    url = f"https://www.baseball-reference.com/leagues/majors/{season}-standings.shtml"
+    try:
+        resp = requests.get(url, headers=BROWSER_HEADERS, timeout=30)
+        resp.encoding = "utf-8"      # same guard as the WAR fetch: requests
+        resp.raise_for_status()      # guesses Latin-1 on these pages
+        tables = _read_tables(resp.text)
+    except Exception as exc:                                  # noqa: BLE001
+        print(f"  standings: could not fetch ({exc.__class__.__name__}: {exc}) "
+              "-- continuing without team records")
+        return {}
+
+    out = {}
+    for raw_table in tables:
+        try:
+            t = _flatten_columns(raw_table)
+        except Exception:                                     # noqa: BLE001
+            continue
+        cols = set(str(c) for c in t.columns)
+        win_col = loss_col = None
+        for w, l in STANDINGS_COL_CANDIDATES:
+            if {w, l}.issubset(cols):
+                win_col, loss_col = w, l
+                break
+        if not win_col:
+            continue
+        # The team label is whichever column isn't a stat -- BR uses "Tm",
+        # "Team", or an unnamed first column depending on the table.
+        team_col = next((c for c in ("Tm", "Team", "Name", t.columns[0])
+                         if c in t.columns), None)
+        if team_col is None:
+            continue
+        for _, row in t.iterrows():
+            abbr = _standings_team_to_abbr(row.get(team_col))
+            if not abbr or abbr in out:
+                continue
+            try:
+                w = int(float(row[win_col]))
+                l = int(float(row[loss_col]))
+            except (TypeError, ValueError):
+                continue
+            if w + l <= 0:
+                continue
+            out[abbr] = {"w": w, "l": l, "pct": round(w / (w + l), 3)}
+
+    if out:
+        print(f"  standings: parsed records for {len(out)} teams")
+    else:
+        print("  standings: no parsable standings table found "
+              "-- continuing without team records")
     return out

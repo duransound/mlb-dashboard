@@ -1,5 +1,5 @@
 """
-Builds the "Diamond Dollars" MLB value-vs-cost dashboard (dashboard_demo.html,
+Builds the MLB value-vs-cost dashboard (dashboard_demo.html,
 copied to index.html for GitHub Pages) from the hand-verified 2026 snapshot in
 mlb_snapshot_data.py. See build_dashboard.py for the live-data version that
 pulls the full league on your own machine.
@@ -14,33 +14,52 @@ project is modeled on).
 """
 
 from chart_builders import (
-    add_derived_fields, build_mvp_tracker, build_story_lede,
-    build_surplus_value_chart, build_team_compare_chart,
-    build_team_spend_chart, build_value_scatter,
+    add_derived_fields, build_awards_race, build_diminishing_returns,
+    build_payroll_efficiency, build_price_of_win, build_story_lede,
+    build_surplus_value_chart, build_takeaways, build_team_compare_chart,
+    build_team_spend_chart, build_team_stories, build_value_scatter,
 )
 from dashboard_template import render_dashboard
 from mlb_snapshot_data import (
     MARKET_RATE_PER_WAR, PLAYER_ROWS, TEAM_NAMES, TEAM_PAYROLL,
 )
 
+# The demo snapshot carries no team records: this kit's sandbox can't reach a
+# standings source, and inventing W-L figures to fill a demo would put fake
+# numbers on a page whose whole point is that its numbers are checkable. The
+# awards tab degrades to WAR-based team context when this is empty, which is
+# exactly the path a failed live standings scrape takes -- so the demo build
+# also serves as the regression test for that fallback.
+STANDINGS = {}
+
 
 def build():
     rows = add_derived_fields(PLAYER_ROWS, MARKET_RATE_PER_WAR)
 
-    chart_value = build_value_scatter(rows, TEAM_NAMES)
-    chart_mvp = build_mvp_tracker(rows)
-    chart_surplus = build_surplus_value_chart(rows, MARKET_RATE_PER_WAR)
-    chart_team_spend = build_team_spend_chart(rows, TEAM_PAYROLL, TEAM_NAMES)
-    chart_compare = build_team_compare_chart(rows, TEAM_NAMES)
-
-    charts = [chart_value, chart_mvp, chart_surplus, chart_team_spend, chart_compare]
-    story = build_story_lede(charts)
+    # Tab order is the argument's order: price the unit -> show who beats
+    # that price -> name them -> ask whether paying more works at all ->
+    # zoom out to teams -> let the reader explore -> close with the point.
+    charts = [
+        build_price_of_win(rows, MARKET_RATE_PER_WAR),
+        build_value_scatter(rows, TEAM_NAMES),
+        build_surplus_value_chart(rows, MARKET_RATE_PER_WAR),
+        build_diminishing_returns(rows, TEAM_NAMES),
+        build_awards_race(rows, STANDINGS, TEAM_NAMES),
+        build_payroll_efficiency(rows, TEAM_PAYROLL, TEAM_NAMES),
+        build_team_spend_chart(rows, TEAM_PAYROLL, TEAM_NAMES),
+        build_team_stories(rows, TEAM_NAMES, STANDINGS, MARKET_RATE_PER_WAR),
+        build_team_compare_chart(rows, TEAM_NAMES),
+    ]
+    charts.append(build_takeaways(charts, rows, TEAM_PAYROLL, TEAM_NAMES,
+                                  MARKET_RATE_PER_WAR, 2026))
+    story = build_story_lede(charts, rows, TEAM_PAYROLL, TEAM_NAMES, MARKET_RATE_PER_WAR)
 
     html = render_dashboard(
-        title="Diamond Dollars — MLB Value vs. Cost",
-        subtitle=("Comparing what MLB players produce (WAR) against what they're paid, 2026 season-to-date. "
-                   "A curated 47-player sample across 15 teams — see the README for why, and how to pull the "
-                   "full league yourself."),
+        title="MLB Value vs. Cost",
+        subtitle=(f"What baseball's wins actually cost, and who is buying them cheapest — {len(rows)} tracked "
+                   f"players across {len({r['team'] for r in rows})} teams, 2026 season-to-date. "
+                   "This is the demo snapshot; see Methods & Sources, or run build_dashboard.py for the "
+                   "full league."),
         charts=charts,
         story=story,
         story_kicker="2026 season, through 8/13",

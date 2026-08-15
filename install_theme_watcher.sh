@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Installs a launchd agent that keeps the "Poppies in the Fog" theme applied to
-# the Diamond Dollars dashboard, so an update that replaces dashboard_template.py
+# the MLB value-vs-cost dashboard, so an update that replaces dashboard_template.py
 # no longer silently reverts the design.
 #
 #   bash install_theme_watcher.sh              # install (or re-install)

@@ -1,4 +1,4 @@
-# Diamond Dollars — MLB Value vs. Cost
+# MLB Value vs. Cost
 
 A sabermetrics dashboard comparing what MLB players **produce** (WAR) against
 what they're **paid** (2026 salary) — built the same way as the
@@ -111,10 +111,27 @@ a URL).
 ## Run it yourself
 
 ```bash
+# One-time setup: this project keeps its dependencies in a local .venv.
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+
+# Then, with the venv active:
 python demo_dashboard.py           # rebuilds index.html from the curated snapshot (instant, no network)
 python build_dashboard.py          # pulls the FULL league live (~1 min, needs internet)
 ```
+
+On macOS there is no bare `python` on the PATH — that's what
+`zsh: command not found: python` means. Either activate the venv first (as
+above, which puts a `python` on the PATH), or skip activation and call the
+venv's interpreter directly:
+
+```bash
+./.venv/bin/python build_dashboard.py --season 2026
+```
+
+Plain `python3 build_dashboard.py` uses the *system* Python, which doesn't
+have pandas/requests/lxml installed and will fail with `ModuleNotFoundError`.
 
 `build_dashboard.py` flags: `--season` (default 2026), `--min-pa` / `--min-ip`
 (playing-time floor before a player is fetched at all, default 100 PA / 20
@@ -206,41 +223,34 @@ once you've done the one-time setup below.
 
 ## Hosting on GitHub Pages
 
-`index.html` is already a complete, self-contained static site. This repo
-(`duransound/mlb-dashboard`) is currently empty — here's the one-time setup,
-done on your own machine (not in a Claude session — pushing under your own
-GitHub identity isn't something Claude does on your behalf):
+`index.html` is a complete, self-contained static site, already published at
+**https://duransound.github.io/mlb-dashboard/**.
+
+The repo is set up: `origin` points at `duransound/mlb-dashboard`, the branch
+is `main`, and Pages is serving `/ (root)`. To publish changes:
 
 ```bash
 # from inside this mlb-dashboard folder:
-git init
-git add mlb_snapshot_data.py chart_builders.py dashboard_template.py \
-        demo_dashboard.py mlb_data.py build_dashboard.py \
-        run_weekly_update.sh run_weekly_update.ps1 \
-        requirements.txt README.md .gitignore index.html dashboard_demo.html
-git commit -m "Initial Diamond Dollars MLB dashboard"
-git branch -M main
-git remote add origin https://github.com/duransound/mlb-dashboard.git
-git push -u origin main
+git add -A
+git commit -m "Update dashboard"
+git push
 ```
 
-(If `git push` asks for a password, GitHub no longer accepts your account
+Pages redeploys in about a minute. Hard-refresh (Cmd+Shift+R) to get past the
+browser cache.
+
+If `git push` asks for a password, GitHub no longer accepts your account
 password there — use `gh auth login` or a
-[Personal Access Token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
-instead. Both are one-time steps.)
+[Personal Access Token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+Both are one-time steps.
 
-Then on the repo's GitHub page: **Settings → Pages** → under "Build and
-deployment," Source = "Deploy from a branch," Branch = `main`, folder =
-`/ (root)` → Save. Wait about a minute, then visit
-`https://duransound.github.io/mlb-dashboard/`.
-
-After that, `run_weekly_update.sh`/`.ps1` already detect the git setup and
-push automatically each time they run.
+`run_weekly_update.sh`/`.ps1` already commit and push automatically each time
+they run, so a scheduled refresh publishes itself.
 
 **What's public:** the whole repo (source + dashboard) is visible to anyone
 with the link — that's how GitHub Pages' free tier works. Nothing here is
 sensitive; it's public MLB stats and salary figures already published by
-Baseball-Reference/FanGraphs/Spotrac, plus open-source-style code.
+Baseball-Reference and Spotrac, plus open-source-style code.
 
 ## Where to go next
 
