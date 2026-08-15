@@ -78,10 +78,28 @@ def _read_tables(html):
     pandas.read_html is deprecated (and, worse, pandas sometimes tries to
     interpret a literal HTML string as a filepath/URL if it doesn't sniff
     unambiguously as markup, which raises a confusing FileNotFoundError)."""
+    tables = []
     try:
-        return pd.read_html(io.StringIO(html))
+        tables.extend(pd.read_html(io.StringIO(html)))
     except ValueError:
-        return pd.read_html(io.StringIO(html.replace("<!--", "").replace("-->", "")))
+        pass
+    # ALWAYS do the comment-stripped pass too, not just as a fallback.
+    # Baseball-Reference ships most secondary tables inside <!-- --> -- on the
+    # standings page the division W-L tables are plain HTML but the *expanded*
+    # standings (the one carrying R/RA/Rdiff) is commented out. Because the
+    # first parse succeeded on the visible tables, the old fallback-only
+    # version never ran the second pass, so those tables were invisible and
+    # the Pythagorean tab silently had no runs to work with.
+    # Raw-pass tables stay FIRST in the list so callers that take the first
+    # match (e.g. _find_table_with_columns for WAR) keep their existing
+    # behaviour; the stripped pass only ever adds options at the end.
+    if "<!--" in html:
+        try:
+            tables.extend(pd.read_html(io.StringIO(
+                html.replace("<!--", "").replace("-->", ""))))
+        except ValueError:
+            pass
+    return tables
 
 
 def _flatten_columns(df):
@@ -366,12 +384,25 @@ def _standings_team_to_abbr(raw):
     return None
 
 
-def fetch_standings(season):
-    """Returns {abbr: {"w": int, "l": int, "pct": float}} for every team it
-    can parse, or {} if anything at all goes wrong.
+# Runs scored / runs allowed column namings, for the Pythagorean tab. On
+# Baseball-Reference these live in the *expanded* standings table, which is a
+# different table on the same page from the plain W-L one -- hence the merge
+# loop below rather than "first table wins".
+RUNS_COL_CANDIDATES = [("R", "RA"), ("RS", "RA"), ("Runs", "Runs Allowed")]
 
-    Never raises. Callers should treat {} as "team records unavailable" and
-    fall back to WAR-based team context."""
+
+def fetch_standings(season):
+    """Returns {abbr: {"w", "l", "pct"[, "r", "ra"]}} for every team it can
+    parse, or {} if anything at all goes wrong.
+
+    Runs scored/allowed are OPTIONAL and merged in from whichever table on the
+    page carries them -- Baseball-Reference splits plain W-L and expanded
+    (R/RA/Rdiff) standings across separate tables, so a team's fields can come
+    from two different tables. Callers that need runs must check for the keys;
+    the Pythagorean tab is skipped entirely when they're absent rather than
+    invented.
+
+    Never raises. {} means "team records unavailable"."""
     url = f"https://www.baseball-reference.com/leagues/majors/{season}-standings.shtml"
     try:
         resp = requests.get(url, headers=BROWSER_HEADERS, timeout=30)
@@ -384,40 +415,100 @@ def fetch_standings(season):
         return {}
 
     out = {}
+    unmatched = set()
     for raw_table in tables:
         try:
             t = _flatten_columns(raw_table)
         except Exception:                                     # noqa: BLE001
             continue
         cols = set(str(c) for c in t.columns)
+
         win_col = loss_col = None
         for w, l in STANDINGS_COL_CANDIDATES:
             if {w, l}.issubset(cols):
                 win_col, loss_col = w, l
                 break
-        if not win_col:
+        runs_col = allowed_col = None
+        for rs, ra in RUNS_COL_CANDIDATES:
+            if {rs, ra}.issubset(cols):
+                runs_col, allowed_col = rs, ra
+                break
+        # A table is only useful if it carries records, runs, or both.
+        if not win_col and not runs_col:
             continue
-        # The team label is whichever column isn't a stat -- BR uses "Tm",
-        # "Team", or an unnamed first column depending on the table.
+
         team_col = next((c for c in ("Tm", "Team", "Name", t.columns[0])
                          if c in t.columns), None)
         if team_col is None:
             continue
+
         for _, row in t.iterrows():
-            abbr = _standings_team_to_abbr(row.get(team_col))
-            if not abbr or abbr in out:
+            raw_label = row.get(team_col)
+            abbr = _standings_team_to_abbr(raw_label)
+            if not abbr:
+                label = str(raw_label).strip()
+                # Ignore the obvious non-team rows every BR table carries.
+                if (label and label.lower() not in ("nan", "tm", "team", "name")
+                        and "average" not in label.lower()
+                        and "total" not in label.lower()
+                        and not label.startswith("Unnamed")):
+                    unmatched.add(label)
                 continue
-            try:
-                w = int(float(row[win_col]))
-                l = int(float(row[loss_col]))
-            except (TypeError, ValueError):
-                continue
-            if w + l <= 0:
-                continue
-            out[abbr] = {"w": w, "l": l, "pct": round(w / (w + l), 3)}
+            entry = out.get(abbr, {})
+
+            if win_col and "w" not in entry:
+                try:
+                    w = int(float(row[win_col]))
+                    l = int(float(row[loss_col]))
+                except (TypeError, ValueError):
+                    w = l = None
+                if w is not None and w + l > 0:
+                    entry.update({"w": w, "l": l, "pct": round(w / (w + l), 3)})
+
+            if runs_col and "r" not in entry:
+                try:
+                    r = float(row[runs_col])
+                    ra = float(row[allowed_col])
+                except (TypeError, ValueError):
+                    r = ra = None
+                # Baseball-Reference's expanded standings reports R and RA as
+                # RUNS PER GAME (e.g. 4.6 / 4.1), not season totals. An
+                # earlier guard here required both to exceed 50 -- meant to
+                # reject a stray rank column -- and rejected the real data
+                # instead. Both units are accepted now and the unit is
+                # recorded, because the two must not be silently mixed:
+                # Pythagorean expectation is scale-invariant so the
+                # percentage is identical either way, but anything that
+                # DISPLAYS a run figure has to know which it's holding.
+                if r is not None and ra is not None and r > 0 and ra > 0:
+                    if r < 25 and ra < 25:
+                        entry.update({"r": r, "ra": ra, "runs_per_game": True})
+                    elif r > 50 and ra > 50:
+                        entry.update({"r": r, "ra": ra, "runs_per_game": False})
+
+            if entry:
+                out[abbr] = entry
+
+    # Only teams with a real W-L are usable downstream; a stray row that
+    # matched a team name but produced no record is dropped.
+    out = {k: v for k, v in out.items() if "w" in v}
 
     if out:
-        print(f"  standings: parsed records for {len(out)} teams")
+        with_runs = sum(1 for v in out.values() if "r" in v)
+        rate_based = sum(1 for v in out.values() if v.get("runs_per_game"))
+        unit = " as runs per game" if rate_based and rate_based == with_runs else ""
+        print(f"  standings: parsed records for {len(out)} teams "
+              f"({with_runs} with runs scored/allowed{unit})")
+        if len(out) < len(TEAM_NAMES):
+            missing = sorted(set(TEAM_NAMES) - set(out))
+            print(f"  standings: no record found for {', '.join(missing)}")
+        if unmatched:
+            print("  standings: these table labels didn't map to a team -- "
+                  f"{'; '.join(sorted(unmatched)[:8])}")
+        if not with_runs:
+            print("  standings: no runs-scored/allowed columns found -- the "
+                  "Pythagorean tab will be skipped this build. Run "
+                  "`python diagnose_standings.py` to dump what's on the page.")
     else:
         print("  standings: no parsable standings table found "
               "-- continuing without team records")

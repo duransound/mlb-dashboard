@@ -43,7 +43,7 @@ def _source(*parts):
     """Assembles the per-chart credit line. Kept as a helper so every chart
     spells the sources the same way and a source URL only ever changes in
     one place."""
-    return "Source — " + "; ".join(parts) + "."
+    return "<strong>Data sources</strong> &nbsp;·&nbsp; " + " &nbsp;·&nbsp; ".join(parts)
 
 
 SOURCE_VALUE = _source(SRC_WAR, SRC_SALARY, SRC_RATE)
@@ -1001,6 +1001,209 @@ def build_payroll_efficiency(rows, team_payroll, team_names):
     }
 
 
+
+# ---------------------------------------------------------------------------
+# Pythagorean expectation
+# ---------------------------------------------------------------------------
+
+# Bill James' original exponent was 2; 1.83 is the value the sabermetric
+# community settled on as fitting MLB run environments better, and it's what
+# Baseball-Reference itself uses for its pythWL column. Named as a constant
+# because it IS a modelling choice, not a law.
+PYTHAG_EXPONENT = 1.83
+
+
+def pythagorean_pct(runs, runs_allowed, exponent=PYTHAG_EXPONENT):
+    """Expected winning percentage from runs scored and allowed.
+
+    Returns None rather than a number when the inputs can't support one -- a
+    team with no runs allowed would divide by zero, and a team with no runs at
+    all has no expectation to compute."""
+    if not runs or not runs_allowed or runs <= 0 or runs_allowed <= 0:
+        return None
+    rs = runs ** exponent
+    ra = runs_allowed ** exponent
+    denom = rs + ra
+    return (rs / denom) if denom else None
+
+
+def build_pythagorean(rows, standings, team_names):
+    """Pythagorean expectation vs. actual record, plus who on each roster
+    produced the wins.
+
+    Returns None when no team has runs scored/allowed -- the metric is DEFINED
+    by runs, so without them there is nothing to show and the tab is omitted
+    rather than filled with a substitute. mlb_data.fetch_standings() merges
+    runs in from Baseball-Reference's expanded standings table when it can.
+
+    TWO LENSES, NOT ONE CAUSAL STORY. Pythagorean says what a team's run
+    totals imply about its record. WAR says who produced. They are different
+    measurements of the same season, and the gap between expected and actual
+    wins is NOT attributable to the players listed underneath -- that gap is
+    mostly bullpen sequencing, one-run-game outcomes and timing. The copy says
+    so explicitly, because a player leaderboard sitting under a luck number
+    invites exactly the causal reading the data can't support."""
+    priced = {abbr: rec for abbr, rec in (standings or {}).items()
+              if pythagorean_pct(rec.get("r"), rec.get("ra")) is not None}
+    if not priced:
+        return None
+
+    by_team = {}
+    for r in rows:
+        by_team.setdefault(r["team"], []).append(r)
+
+    teams = {}
+    for abbr, rec in priced.items():
+        # Scale-invariance is why this works on either unit: multiplying both
+        # R and RA by games played cancels out of the ratio entirely, so a
+        # per-game rate yields exactly the same percentage as a season total.
+        pct = pythagorean_pct(rec["r"], rec["ra"])
+        games = rec["w"] + rec["l"]
+        exp_w = pct * games
+        delta = rec["w"] - exp_w
+        per_game = bool(rec.get("runs_per_game"))
+        teams[abbr] = {
+            "name": team_names.get(abbr, abbr),
+            "per_game": per_game,
+            # Displayed in the unit it was sourced in. Reconstructing season
+            # totals from a rate rounded to one decimal would be +/- ~6 runs
+            # of invented precision, so it isn't done.
+            "r_txt": (f'{rec["r"]:.1f}' if per_game else f'{rec["r"]:.0f}'),
+            "ra_txt": (f'{rec["ra"]:.1f}' if per_game else f'{rec["ra"]:.0f}'),
+            "diff_txt": (f'{rec["r"] - rec["ra"]:+.1f}' if per_game
+                         else f'{rec["r"] - rec["ra"]:+.0f}'),
+            "unit": ("per game" if per_game else "total"),
+            "r": rec["r"], "ra": rec["ra"], "diff": rec["r"] - rec["ra"],
+            "pct": pct, "actual_pct": rec["pct"],
+            "w": rec["w"], "l": rec["l"],
+            "exp_w": exp_w, "exp_l": games - exp_w,
+            "delta": delta,
+            "players": sorted(by_team.get(abbr, []), key=lambda p: -p["war"]),
+        }
+
+    luckiest = max(teams.values(), key=lambda t: t["delta"])
+    unluckiest = min(teams.values(), key=lambda t: t["delta"])
+
+    SEP = "\u001f"
+    groups = {}
+
+    # League view: every team by how far its actual record sits from what its
+    # run differential implies.
+    league_rows = sorted(teams.values(), key=lambda t: -t["delta"])
+    groups["All of MLB"] = {
+        "title": (f"{luckiest['name']} have won {luckiest['delta']:.1f} more games than their runs imply; "
+                  f"{unluckiest['name']} {abs(unluckiest['delta']):.1f} fewer"),
+        "caption": ("<strong>Each bar is one team: actual wins minus the wins its run totals predict.</strong> "
+                    "Positive means a team is beating its run differential — usually a good bullpen, a knack "
+                    "for one-run games, or plain sequencing luck. Negative means the opposite: the runs were "
+                    "there, the wins weren't. Pick a team to see its full run profile and who produced its "
+                    "wins."),
+        "data": [
+            {"label": t["name"], "value": round(t["delta"], 1),
+             "highlight": t["name"] == luckiest["name"],
+             "extra": (f'{t["w"]}-{t["l"]} actual &middot; {t["exp_w"]:.1f}-{t["exp_l"]:.1f} expected '
+                       f'&middot; {t["r_txt"]} runs scored, {t["ra_txt"]} allowed '
+                       f'{t["unit"]} ({t["diff_txt"]} differential)')}
+            for t in league_rows
+        ],
+        "xAxisLabel": "Actual wins minus expected wins",
+        "valueLabel": "Wins vs. expected",
+        "stats": [
+            {"label": "Teams with run data", "value": f"{len(teams)}"},
+            {"label": "Biggest overperformer", "value": f"{luckiest['name']} ({luckiest['delta']:+.1f})"},
+            {"label": "Biggest underperformer",
+             "value": f"{unluckiest['name']} ({unluckiest['delta']:+.1f})"},
+            {"label": "Formula", "value": f"R^{PYTHAG_EXPONENT} ÷ (R^{PYTHAG_EXPONENT} + RA^{PYTHAG_EXPONENT})"},
+        ],
+    }
+
+    for abbr in sorted(teams, key=lambda a: teams[a]["name"]):
+        t = teams[abbr]
+        players = t["players"]
+        if not players:
+            continue
+        best = players[0]
+        worst = players[-1]
+        verdict = ("outrunning" if t["delta"] > 1 else
+                   "lagging" if t["delta"] < -1 else "matching")
+        runs_phrase = (f"{t['r_txt']} runs a game and allowed {t['ra_txt']}"
+                       if t["per_game"] else
+                       f"{t['r_txt']} runs and allowed {t['ra_txt']}")
+        if verdict == "outrunning":
+            summary = (f"<strong>{t['name']} are {t['delta']:.1f} wins ahead of what their runs "
+                       f"predict.</strong> They've scored {runs_phrase} — a {t['diff_txt']} differential "
+                       f"that implies a {t['exp_w']:.0f}-{t['exp_l']:.0f} record, against an actual "
+                       f"{t['w']}-{t['l']}.")
+        elif verdict == "lagging":
+            summary = (f"<strong>{t['name']} are {abs(t['delta']):.1f} wins short of what their runs "
+                       f"predict.</strong> Scoring {runs_phrase} implies "
+                       f"{t['exp_w']:.0f}-{t['exp_l']:.0f}; the actual record is {t['w']}-{t['l']}. The "
+                       "production has been there; the results haven't followed it.")
+        else:
+            summary = (f"<strong>{t['name']} are right where their runs say they should be</strong> — "
+                       f"{t['exp_w']:.0f}-{t['exp_l']:.0f} expected against {t['w']}-{t['l']} actual, off "
+                       f"the run-differential prediction by {abs(t['delta']):.1f} of a win.")
+
+        groups[t["name"]] = {
+            "title": (f"{t['name']}: {t['w']}-{t['l']} actual, {t['exp_w']:.0f}-{t['exp_l']:.0f} expected "
+                      f"from a {t['diff_txt']} run differential {t['unit']}"),
+            "caption": (summary + " <em>The players below are ranked by wins contributed (WAR) — that's who "
+                        "produced, not who caused the gap above. Nothing in a player's WAR explains whether "
+                        "a team beats its run differential; that's bullpen sequencing and one-run games.</em>"),
+            "data": [
+                {"label": p["name"], "value": round(p["war"], 1),
+                 "highlight": p["id"] == best["id"],
+                 "extra": (f'{p["role"]} &middot; ${p["salary_m"]:.1f}M'
+                           + (" &middot; roster's biggest positive contribution" if p["id"] == best["id"]
+                              else (" &middot; roster's lowest contribution" if p["id"] == worst["id"] else "")))}
+                for p in players
+            ],
+            "xAxisLabel": "WAR — wins each player contributed",
+            "valueLabel": "WAR",
+            "stats": [
+                {"label": f'Runs scored {t["unit"]}', "value": t["r_txt"]},
+                {"label": f'Runs allowed {t["unit"]}', "value": t["ra_txt"]},
+                {"label": f'Run differential {t["unit"]}', "value": t["diff_txt"]},
+                {"label": "Expected win %", "value": f'{t["pct"]:.3f}'},
+                {"label": "Actual win %", "value": f'{t["actual_pct"]:.3f}'},
+                {"label": "Wins vs. expected", "value": f'{t["delta"]:+.1f}'},
+            ],
+        }
+
+    return {
+        "type": "pythagorean", "tabLabel": "Expected vs. Actual",
+        "source": _source(SRC_RECORDS, f'runs scored/allowed: {SOURCE_LINKS["bref"]}', SRC_WAR),
+        "metricLabel": "Pythagorean expectation — the record a team's runs predict",
+        "title": (f"{luckiest['name']} have won {luckiest['delta']:.1f} more games than their runs imply; "
+                  f"{unluckiest['name']} {abs(unluckiest['delta']):.1f} fewer"),
+        "blurb": ("Bill James noticed that a team's record tracks its runs scored and allowed closely enough "
+                  "to predict it: <strong>expected win % = R^1.83 ÷ (R^1.83 + RA^1.83)</strong>. Teams that "
+                  "beat that prediction tend to have strong bullpens or good luck in close games; teams that "
+                  "miss it are usually losing games their run totals say they should have won. "
+                  "<strong>Pick a team</strong> to see its run profile, how far it sits from expectation, and "
+                  "which players contributed the most and least production along the way."),
+        "groups": groups,
+        "groupAxes": [{"label": "Team", "options": ["All of MLB"] + [teams[a]["name"] for a in
+                                                                    sorted(teams, key=lambda a: teams[a]["name"])
+                                                                    if teams[a]["players"]]}],
+        "defaultGroup": "All of MLB",
+        "valueLabel": "Wins vs. expected", "xAxisLabel": "Actual wins minus expected wins",
+        "footnote": (("Runs are reported by the source as a per-game rate rather than a season total; "
+                      "Pythagorean expectation is unaffected because the ratio is scale-invariant — "
+                      "multiplying both figures by games played cancels out. Season totals are "
+                      "deliberately not reconstructed from a one-decimal rate, which would invent about "
+                      "six runs of precision. "
+                      if any(t["per_game"] for t in teams.values()) else "")
+                     + f"Pythagorean expectation uses exponent {PYTHAG_EXPONENT}, the value that fits modern MLB "
+                     "run environments better than James' original 2 and the one Baseball-Reference uses. "
+                     "Expected wins are that percentage applied to games actually played, so they move with "
+                     "the season. A team's gap from expectation is not a player statistic: it reflects when "
+                     "runs happened, not how many, and it regresses hard toward zero over a full season. "
+                     "Player bars show WAR — wins contributed — for context on who produced, not blame for "
+                     "the gap."),
+    }
+
+
 def build_takeaways(charts, rows, team_payroll, team_names, market_rate, season):
     """The closing tab. Reuses the already-vetted headline from each earlier
     chart rather than re-deriving claims from raw data -- the same reason
@@ -1117,6 +1320,7 @@ def build_takeaways(charts, rows, team_payroll, team_names, market_rate, season)
 
     return {
         "type": "prose", "tabLabel": "What This Means",
+        "source": SOURCE_AWARDS,
         "metricLabel": "The argument, and how it was built",
         "title": "Production is cheap. Paying for production is expensive.",
         "blurb": ("The dashboard's whole case, and the methodology behind it, in one place — so the charts "

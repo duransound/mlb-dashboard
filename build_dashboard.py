@@ -28,6 +28,7 @@ import difflib
 
 from chart_builders import (
     add_derived_fields, build_awards_race, build_diminishing_returns,
+    build_pythagorean,
     build_payroll_efficiency, build_price_of_win, build_story_lede,
     build_surplus_value_chart, build_takeaways, build_team_compare_chart,
     build_team_spend_chart, build_team_stories, build_value_scatter,
@@ -151,6 +152,15 @@ def main():
         build_team_stories(rows, TEAM_NAMES, standings, MARKET_RATE_PER_WAR),
         build_team_compare_chart(rows, TEAM_NAMES),
     ]
+    # Pythagorean expectation is DEFINED by runs scored/allowed. When the
+    # standings scrape didn't surface them, build_pythagorean returns None and
+    # the tab is simply absent -- better than a tab that substitutes some
+    # other number for the one the metric is made of.
+    pythag = build_pythagorean(rows, standings, TEAM_NAMES)
+    if pythag:
+        charts.insert(7, pythag)   # after the team-level tabs, before Team Stories
+    else:
+        print("  (no runs data -- Expected vs. Actual tab omitted from this build)")
     charts.append(build_takeaways(charts, rows, team_payroll, TEAM_NAMES,
                                   MARKET_RATE_PER_WAR, args.season))
 

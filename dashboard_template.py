@@ -126,10 +126,27 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   .tooltip .name {{ font-weight: 600; margin-bottom: 2px; }}
   .tooltip .row {{ color: #d8d8d4; }}
   .footnote {{ font-size: 11px; color: var(--text-muted); margin-top: 14px; }}
-  /* Per-chart data credit -- see SOURCE_* in chart_builders.py. */
+  /* Stat row above the Pythagorean bars -- see drawPythagorean. */
+  .stat-row {{ display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 18px; }}
+  .stat-cell {{
+    flex: 1 1 120px; background: var(--surface-2); border-radius: 8px;
+    padding: 10px 12px; min-width: 110px;
+  }}
+  .stat-value {{ font-family: var(--font-head); font-size: 17px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }}
+  .stat-label {{ font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); margin-top: 3px; }}
   .zoom-note {{ font-size: 11.5px; color: var(--text-secondary); margin: 2px 0 10px; }}
-  .source-line {{ font-size: 10.5px; color: var(--text-muted); margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--grid); }}
-  .source-line a {{ color: var(--series-1-dark); text-decoration: none; border-bottom: 1px solid var(--grid); }}
+  /* Per-chart data credit -- see SOURCE_* in chart_builders.py. Rendered as
+     a quiet chip directly under its chart. The first version was 10.5px
+     --text-muted stranded below the footnote: technically credit, and in
+     practice invisible -- the user reported not seeing it at all. */
+  .source-line {{
+    display: block; font-size: 11.5px; line-height: 1.5;
+    color: var(--text-secondary); background: var(--surface-2);
+    border-left: 3px solid var(--brand-clay); border-radius: 0 6px 6px 0;
+    padding: 9px 14px; margin: 18px 0 0;
+  }}
+  .source-line strong {{ color: var(--text-primary); font-weight: 700; }}
+  .source-line a {{ color: var(--series-1-dark); text-decoration: none; border-bottom: 1px solid var(--baseline); }}
   .source-line a:hover {{ border-bottom-color: var(--series-1); }}
   .page-footer {{ font-size: 11px; color: var(--text-muted); margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--grid); line-height: 1.6; }}
   .page-footer a {{ color: var(--series-1-dark); text-decoration: none; border-bottom: 1px solid var(--grid); }}
@@ -349,12 +366,18 @@ function drawDivergingBar(container, cfg) {{
         if (h2) h2.textContent = baseTitle;
         caption.innerHTML = cfg.emptyGroupNote ||
           "No players match this combination.";
+        if (cfg.onGroupChange) cfg.onGroupChange(key);
         return;
       }}
       if (h2) h2.textContent = g.title || baseTitle;
       caption.innerHTML = g.caption || "";
+      if (cfg.onGroupChange) cfg.onGroupChange(key);
       drawDivergingBar(mount, {{...cfg, groups: null, groupAxes: null,
                                members: g.members || cfg.members,
+                               xAxisLabel: g.xAxisLabel || cfg.xAxisLabel,
+                               valueLabel: g.valueLabel || cfg.valueLabel,
+                               annotationSuffix: g.annotationSuffix !== undefined
+                                 ? g.annotationSuffix : cfg.annotationSuffix,
                                data: g.data.map(d => ({{...d}}))}});
     }};
     selects.forEach(sel => sel.addEventListener("change", renderGroup));
@@ -1352,6 +1375,43 @@ function drawTeamStory(container, cfg) {{
   render();
 }}
 
+
+// Pythagorean expectation. Structurally it's the grouped diverging bar with a
+// stat row bolted on top -- the run totals are the point of the tab and
+// burying them in a caption would make the bars unreadable on their own.
+function drawPythagorean(container, cfg) {{
+  const statsMount = document.createElement("div");
+  container.appendChild(statsMount);
+  const barMount = document.createElement("div");
+  container.appendChild(barMount);
+
+  // The group picker lives in drawDivergingBar; hook its change event to keep
+  // the stat row in sync rather than duplicating the picker here.
+  const renderStats = (key) => {{
+    const g = cfg.groups[key];
+    statsMount.innerHTML = "";
+    if (!g || !g.stats) return;
+    const row = document.createElement("div");
+    row.className = "stat-row";
+    g.stats.forEach(st => {{
+      const cell = document.createElement("div");
+      cell.className = "stat-cell";
+      cell.innerHTML = `<div class="stat-value">${{st.value}}</div><div class="stat-label">${{st.label}}</div>`;
+      row.appendChild(cell);
+    }});
+    statsMount.appendChild(row);
+  }};
+
+  drawDivergingBar(barMount, {{...cfg, onGroupChange: renderStats}});
+
+  // drawDivergingBar builds the picker inside barMount; move the stat row in
+  // behind it so the order reads pick-a-team -> its numbers -> its chart.
+  const pickerRow = barMount.querySelector(".picker-row");
+  if (pickerRow && pickerRow.parentNode) {{
+    pickerRow.parentNode.insertBefore(statsMount, pickerRow.nextSibling);
+  }}
+}}
+
 function drawLine(container, cfg) {{
   // Single-series line chart -- e.g. a league-wide total plotted one point
   // per season. One highlighted point (per the highlight/mute convention
@@ -1553,8 +1613,9 @@ CHARTS.forEach((chart, i) => {{
   const panel = document.createElement("div");
   panel.className = "panel" + (i === 0 ? " active" : "");
   panel.id = "panel-" + i;
-  panel.innerHTML = `<p class="kicker">${{chart.metricLabel || chart.tabLabel}}</p><h2>${{chart.title}}</h2><p class="blurb">${{chart.blurb}}</p><div class="chart-mount"></div><p class="footnote">${{chart.footnote || ""}}</p>` +
-    (chart.source ? `<p class="source-line">${{chart.source}}</p>` : "");
+  panel.innerHTML = `<p class="kicker">${{chart.metricLabel || chart.tabLabel}}</p><h2>${{chart.title}}</h2><p class="blurb">${{chart.blurb}}</p><div class="chart-mount"></div>` +
+    (chart.source ? `<p class="source-line">${{chart.source}}</p>` : "") +
+    `<p class="footnote">${{chart.footnote || ""}}</p>`;
   panelsEl.appendChild(panel);
 
   const mount = panel.querySelector(".chart-mount");
@@ -1569,6 +1630,7 @@ CHARTS.forEach((chart, i) => {{
   if (chart.type === "prose") drawProse(mount, chart);
   if (chart.type === "awards-race") drawAwardsRace(mount, chart);
   if (chart.type === "team-story") drawTeamStory(mount, chart);
+  if (chart.type === "pythagorean") drawPythagorean(mount, chart);
 }});
 </script>
 </body>
